@@ -1,116 +1,141 @@
-# Setup Google Drive — dapatkan `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` & `GOOGLE_DRIVE_FOLDER_ID`
+# Setup Google Drive (OAuth user) — env `GOOGLE_OAUTH_*` & `GOOGLE_DRIVE_FOLDER_ID`
 
-Dua env var ini dipakai `lib/googleDrive.ts` untuk upload/download file `.rvt`
-(lihat spec bagian 2 & 5). Pakai **service account** (bukan OAuth user) supaya
-add-in Revit bisa upload otomatis tanpa login interaktif tiap push.
+Dipakai `lib/googleDrive.ts` untuk upload/download file `.rvt` (spec bagian 2 & 5).
 
-> ⚠️ File JSON service account = kredensial rahasia. JANGAN pernah di-commit.
-> `.gitignore` sudah memblok `.env*`. Isi value asli cuma di `.env.local`
-> (dev) dan dashboard Vercel (prod).
+Env yang perlu diisi:
+
+| Env | Isi |
+|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` | Client ID OAuth (langkah 2) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Client secret OAuth (langkah 2) |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | Refresh token, diambil sekali (langkah 4) |
+| `GOOGLE_DRIVE_FOLDER_ID` | ID folder tujuan (langkah 5) |
+
+> ⚠️ Semua ini kredensial rahasia. JANGAN di-commit. `.gitignore` sudah blok
+> `.env*`. Isi value asli cuma di `.env.local` (dev) & dashboard Vercel (prod).
 
 ---
 
-## 1. Buat / pilih project di Google Cloud
+## Kenapa OAuth user, bukan service account? (soal biaya)
 
-1. Buka <https://console.cloud.google.com/>.
-2. Pojok kiri atas → dropdown project → **New Project** (atau pakai yang sudah
-   ada). Kasih nama, misal `revit-web-viewer`. Klik **Create**.
+- **Google Drive API = gratis.** Tidak ada tagihan, tidak perlu aktifkan
+  billing / kartu kredit. Yang kepakai kuota itu *storage*, bukan API call.
+- **Service account punya kuota storage ~0.** File yang di-upload service
+  account dimiliki oleh service account (bukan akunmu), jadi file `.rvt` besar
+  gagal `storage quota exceeded` — walau folder-nya punya kamu. Nembusnya butuh
+  **Shared Drive** yang perlu **Google Workspace (berbayar)**.
+- **OAuth user → file dimiliki akun Google kamu**, masuk kuota **15 GB gratis**.
+  Ini jalur gratis untuk file besar. Trade-off: ambil refresh token **sekali**
+  di awal (langkah 4). Setelah itu jalan otomatis, token di-refresh sendiri.
 
-## 2. Aktifkan Google Drive API
+> Kalau total file `.rvt` nanti > 15 GB, mau tak mau upgrade Google One
+> (berbayar, ~Rp27rb/bln untuk 100 GB) atau terapkan retention (hapus versi
+> lama) — lihat spec bagian 11.
 
-1. Menu (☰) → **APIs & Services** → **Library**.
-2. Cari **Google Drive API** → klik → **Enable**.
+---
 
-## 3. Buat service account
+## 1. Project + aktifkan Drive API
 
-1. **APIs & Services** → **Credentials** → **+ Create Credentials** →
-   **Service account**.
-2. Isi nama, misal `revit-drive-uploader` → **Create and Continue**.
-3. Role tidak perlu diisi (akses diatur lewat sharing folder, bukan IAM
-   project) → **Continue** → **Done**.
-4. Catat **email** service account-nya, bentuknya seperti:
-   `revit-drive-uploader@revit-web-viewer.iam.gserviceaccount.com`
-   (dipakai di langkah 6 untuk share folder).
+1. <https://console.cloud.google.com/> → buat/pilih project (misal `revit-web-viewer`).
+2. Menu (☰) → **APIs & Services** → **Library** → cari **Google Drive API** → **Enable**.
 
-## 4. Generate kunci JSON
+## 2. Buat OAuth Client ID (tipe Desktop app)
 
-1. Di daftar Credentials, klik service account tadi → tab **Keys**.
-2. **Add Key** → **Create new key** → pilih **JSON** → **Create**.
-3. File `.json` otomatis ter-download. Ini isi dari
-   `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`.
+1. **APIs & Services** → **OAuth consent screen** (kalau belum pernah):
+   - User type **External** → isi nama app, email support, email developer → Save.
+   - Di bagian **Scopes**, tidak wajib nambah manual (scope diminta saat auth).
+2. **APIs & Services** → **Credentials** → **+ Create Credentials** →
+   **OAuth client ID**.
+3. Application type: **Desktop app** (penting — tipe ini otomatis mengizinkan
+   redirect `http://localhost`, jadi tidak perlu daftar redirect URI manual).
+4. **Create** → muncul **Client ID** & **Client secret**. Ini isi
+   `GOOGLE_OAUTH_CLIENT_ID` & `GOOGLE_OAUTH_CLIENT_SECRET`.
 
-## 5. Ubah JSON jadi satu baris untuk env var
+## 3. Publish consent screen (WAJIB — biar token tidak expired)
 
-`lib/googleDrive.ts` memanggil `JSON.parse(...)`, jadi value-nya harus JSON
-valid. Paling aman: jadikan **satu baris** (newline di dalam `private_key`
-tetap sebagai `\n` — jangan diutak-atik).
+**APIs & Services** → **OAuth consent screen** → **Publish app** → set status
+ke **In production**.
 
-Di terminal (ganti path ke file hasil download):
+> Kalau status dibiarkan **Testing**, refresh token **expired dalam 7 hari** dan
+> upload tiba-tiba berhenti jalan. Di Production, refresh token tidak expired
+> (kecuali kamu cabut akses / tidak dipakai 6 bulan). Untuk scope `drive.file`
+> + pemakaian pribadi, publish biasanya langsung jalan; kalau muncul layar
+> "Google hasn't verified this app", klik **Advanced → Go to (app)** — aman
+> karena appmu sendiri.
+
+## 4. Ambil refresh token (sekali jalan)
+
+Dari root repo, set client id/secret ke environment lalu jalankan script bawaan:
 
 ```bash
-# macOS / Linux — hasilnya JSON satu baris, tinggal copy
-cat ~/Downloads/revit-web-viewer-xxxx.json | tr -d '\n'
+export GOOGLE_OAUTH_CLIENT_ID='xxxx.apps.googleusercontent.com'
+export GOOGLE_OAUTH_CLIENT_SECRET='xxxx'
+node scripts/get-refresh-token.mjs
 ```
 
 ```powershell
 # Windows PowerShell
-(Get-Content -Raw ~\Downloads\revit-web-viewer-xxxx.json) -replace "`r`n","" -replace "`n",""
+$env:GOOGLE_OAUTH_CLIENT_ID='xxxx.apps.googleusercontent.com'
+$env:GOOGLE_OAUTH_CLIENT_SECRET='xxxx'
+node scripts/get-refresh-token.mjs
 ```
 
-## 6. Buat folder Drive & ambil `GOOGLE_DRIVE_FOLDER_ID`
+Script akan mencetak sebuah URL. Buka di browser → login akun Google kamu →
+izinkan akses. Setelah itu terminal mencetak:
 
-1. Buka <https://drive.google.com/> → buat folder, misal `RVT Files`.
-2. Buka folder itu. Lihat URL:
+```
+GOOGLE_OAUTH_REFRESH_TOKEN=1//0abc...
+```
+
+Copy baris itu ke `.env.local`.
+
+> Kalau script bilang "tidak dapat refresh_token" (karena app sudah pernah
+> diizinkan), cabut dulu di <https://myaccount.google.com/permissions> lalu
+> ulangi.
+
+## 5. Buat folder Drive & ambil `GOOGLE_DRIVE_FOLDER_ID`
+
+1. <https://drive.google.com/> → buat folder (misal `RVT Files`).
+2. Buka folder → lihat URL:
    `https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz`
-   → bagian setelah `/folders/` itulah **`GOOGLE_DRIVE_FOLDER_ID`**.
-3. **PENTING** — share folder ke email service account (langkah 3.4):
-   klik kanan folder → **Share** → paste email service account →
-   beri akses **Editor** → **Send**. Tanpa ini, upload akan gagal
-   `403 / File not found` walau kredensial benar.
+   → bagian setelah `/folders/` = **`GOOGLE_DRIVE_FOLDER_ID`**.
 
-> Catatan: kalau file .rvt besar tapi service account kena kuota storage,
-> pindahkan folder ke **Shared Drive** dan tambahkan service account sebagai
-> member — storage ikut Shared Drive, bukan kuota service account.
+> Tidak perlu di-share ke siapa pun: karena OAuth pakai akun kamu, folder ini
+> memang sudah milik kamu.
 
-## 7. Isi env var
+## 6. Isi env var
 
-### Dev — `.env.local` (di root repo, sudah di-gitignore)
-
-Copy dari contoh lalu isi:
+### Dev — `.env.local` (di root repo, sudah gitignored)
 
 ```bash
 cp .env.local.example .env.local
 ```
 
-Isi dua baris ini (JSON dibungkus **single quote**, ditulis satu baris):
+Isi:
 
 ```bash
-GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON='{"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"...","...":"..."}'
+GOOGLE_OAUTH_CLIENT_ID=xxxx.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=xxxx
+GOOGLE_OAUTH_REFRESH_TOKEN=1//0abc...
 GOOGLE_DRIVE_FOLDER_ID=1AbCdEfGhIjKlMnOpQrStUvWxYz
 ```
 
 ### Prod — dashboard Vercel
 
-Vercel → project → **Settings** → **Environment Variables**:
+**Settings** → **Environment Variables** → tambahkan empat var yang sama
+(scope **Production**, dan **Preview** kalau perlu) → **redeploy** (env var baru
+tidak otomatis kepakai di deployment lama).
 
-| Name | Value |
-|---|---|
-| `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` | tempel JSON satu baris (tanpa quote pembungkus — Vercel simpan apa adanya) |
-| `GOOGLE_DRIVE_FOLDER_ID` | folder id dari langkah 6 |
-
-Set scope **Production** (dan **Preview** kalau perlu). Setelah simpan,
-**redeploy** — env var baru tidak kepakai di deployment yang sudah jalan.
-
-## 8. Tes cepat
-
-Setelah `.env.local` terisi & folder di-share:
+## 7. Tes cepat
 
 ```bash
 npm run dev
-# lalu panggil endpoint drive dengan fileId apa saja yang ada di folder:
+# upload dites lewat add-in / app/api/push; untuk cek kredensial cukup resolve
+# link file yang sudah ada di folder:
 # GET http://localhost:3000/api/drive?fileId=<id-file-di-folder>
 ```
 
-Kalau balik JSON `{ webViewLink, webContentLink }` → kredensial & sharing OK.
-Kalau `403` / `File not found` → cek lagi langkah 6.3 (folder belum di-share
-ke email service account) atau scope API di langkah 2.
+Balik `{ webViewLink, webContentLink }` → OAuth & folder OK. Kalau `invalid_grant`
+→ refresh token salah/expired (cek langkah 3 soal Publish). Kalau `insufficient
+permissions` saat upload ke folder → naikkan scope di
+`scripts/get-refresh-token.mjs` dari `drive.file` ke `drive`, ambil ulang token.

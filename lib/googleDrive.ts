@@ -1,15 +1,22 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
-// Service account (bukan OAuth user) supaya add-in bisa upload otomatis
-// tanpa perlu login interaktif tiap push.
+// OAuth user (bukan service account): file .rvt dimiliki akun Google kamu
+// sendiri, jadi masuk kuota 15GB gratis — bukan kuota ~0 service account
+// yang bikin upload file besar gagal "storage quota exceeded".
+//
+// Refresh token diambil sekali lewat scripts/get-refresh-token.mjs, lalu
+// disimpan di env. Tidak ada login interaktif saat runtime — token di-refresh
+// otomatis oleh library. Lihat docs/GOOGLE-DRIVE-SETUP.md.
 function getDriveClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON!);
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.file'],
+  const oauth2 = new google.auth.OAuth2(
+    process.env.GOOGLE_OAUTH_CLIENT_ID!,
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET!
+  );
+  oauth2.setCredentials({
+    refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN!,
   });
-  return google.drive({ version: 'v3', auth });
+  return google.drive({ version: 'v3', auth: oauth2 });
 }
 
 // Upload file .rvt ke folder yang sudah ditentukan (GOOGLE_DRIVE_FOLDER_ID).

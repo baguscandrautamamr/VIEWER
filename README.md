@@ -30,13 +30,17 @@ itu langkah berikutnya di Fase 1 (lihat spec bagian 8).
 | `NEXT_PUBLIC_SUPABASE_URL` | URL project Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key, aman diekspos ke client (dibatasi RLS) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side only, jangan pernah expose ke client |
-| `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` | Credential service account untuk upload/download file RVT |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client id (Google Drive, file .rvt) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | Refresh token, diambil sekali via `scripts/get-refresh-token.mjs` |
 | `GOOGLE_DRIVE_FOLDER_ID` | Folder tujuan upload file RVT |
 
 Copy `.env.local.example` ke `.env.local` dan isi value asli sebelum `npm run dev`.
 
-Cara dapat dua env Google Drive di atas (bikin service account, JSON key,
-share folder, ambil folder id): lihat **[`docs/GOOGLE-DRIVE-SETUP.md`](docs/GOOGLE-DRIVE-SETUP.md)**.
+Google Drive pakai **OAuth user** (bukan service account) supaya file `.rvt`
+masuk kuota 15GB akun kamu — gratis, tidak kena limit kuota service account.
+Cara dapat semua env Google + kenapa OAuth: lihat
+**[`docs/GOOGLE-DRIVE-SETUP.md`](docs/GOOGLE-DRIVE-SETUP.md)**.
 
 ## Command dasar
 

@@ -35,6 +35,9 @@ itu langkah berikutnya di Fase 1 (lihat spec bagian 8).
 
 Copy `.env.local.example` ke `.env.local` dan isi value asli sebelum `npm run dev`.
 
+Cara dapat dua env Google Drive di atas (bikin service account, JSON key,
+share folder, ambil folder id): lihat **[`docs/GOOGLE-DRIVE-SETUP.md`](docs/GOOGLE-DRIVE-SETUP.md)**.
+
 ## Command dasar
 
 ```bash

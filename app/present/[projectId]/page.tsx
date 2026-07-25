@@ -1,8 +1,10 @@
 import { createServiceClient } from '@/lib/supabase';
+import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import PresentClient, { type ModelFileOption } from '@/components/PresentClient';
 import SheetViewer from '@/components/SheetViewer';
 import VersionBadge from '@/components/VersionBadge';
 import DownloadRvtButton from '@/components/DownloadRvtButton';
+import UiToggles from '@/components/UiToggles';
 
 // Halaman ini selalu dinamis: baca versi terbaru & validasi token per-request,
 // jangan di-prerender saat build (env Supabase belum tentu ada di build time).
@@ -18,6 +20,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
   const { projectId } = await params;
   const { t: token } = await searchParams;
 
+  const [strings, locale, theme] = await Promise.all([getStrings(), getLocale(), getTheme()]);
   const supabase = createServiceClient();
 
   // Gate akses: token wajib cocok dengan projects.client_access_token.
@@ -31,11 +34,9 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
   if (!token || !project) {
     return (
       <main className="flex h-screen items-center justify-center p-6">
-        <div className="max-w-sm rounded border border-white/10 p-6 text-center">
-          <p className="text-sm opacity-80">
-            Link presentasi tidak valid atau token akses salah.
-          </p>
-          <p className="mt-2 text-xs opacity-50">Minta ulang link akses ke tim project.</p>
+        <div className="max-w-sm rounded border border-foreground/10 p-6 text-center">
+          <p className="text-sm opacity-80">{strings.access.invalidLink}</p>
+          <p className="mt-2 text-xs opacity-50">{strings.access.askTeam}</p>
         </div>
       </main>
     );
@@ -71,7 +72,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
   if (!hasAnything) {
     return (
       <main className="flex h-screen items-center justify-center p-6">
-        <div className="text-sm opacity-70">Belum ada model / sheet untuk project ini.</div>
+        <div className="text-sm opacity-70">{strings.access.empty}</div>
       </main>
     );
   }
@@ -88,18 +89,26 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
             />
           )}
         </div>
-        {latestVersion?.rvt_drive_file_id && (
-          <DownloadRvtButton driveFileId={latestVersion.rvt_drive_file_id} />
-        )}
+        <div className="flex items-center gap-3">
+          {latestVersion?.rvt_drive_file_id && (
+            <DownloadRvtButton driveFileId={latestVersion.rvt_drive_file_id} />
+          )}
+          <UiToggles locale={locale} theme={theme} />
+        </div>
       </div>
 
       <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[2fr_1fr]">
-        <div className="rounded border">
-          <PresentClient projectId={projectId} files={files} fallbackUrl={fallbackUrl} />
+        <div className="rounded border border-foreground/15">
+          <PresentClient
+            projectId={projectId}
+            files={files}
+            fallbackUrl={fallbackUrl}
+            locale={locale}
+          />
         </div>
 
-        <div className="overflow-y-auto rounded border p-3">
-          <h2 className="mb-2 text-sm font-medium opacity-70">Sheet</h2>
+        <div className="overflow-y-auto rounded border border-foreground/15 p-3">
+          <h2 className="mb-2 text-sm font-medium opacity-70">{strings.sheets.title}</h2>
           <div className="flex flex-col gap-4">
             {sheets?.map((sheet) => (
               <SheetViewer

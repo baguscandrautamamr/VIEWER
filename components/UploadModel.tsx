@@ -5,7 +5,20 @@ import { useRouter } from 'next/navigation';
 
 // Upload GLB: minta session ke app -> PUT byte langsung ke Google Drive
 // (hindari limit body Vercel) -> catat sebagai model_files.
-export default function UploadModel({ projectId }: { projectId: string }) {
+interface UploadStrings {
+  title: string;
+  label: string;
+  upload: string;
+  uploading: string;
+}
+
+export default function UploadModel({
+  projectId,
+  strings,
+}: {
+  projectId: string;
+  strings: UploadStrings;
+}) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [label, setLabel] = useState('');
@@ -61,32 +74,32 @@ export default function UploadModel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="rounded-lg border border-white/10 p-4">
-      <h2 className="mb-3 text-sm font-medium">Upload model GLB</h2>
+    <div className="rounded-lg border border-foreground/10 p-4">
+      <h2 className="mb-3 text-sm font-medium">{strings.title}</h2>
       <input
         ref={fileRef}
         type="file"
         accept=".glb,model/gltf-binary"
-        className="block w-full text-xs file:mr-3 file:rounded file:border-0 file:bg-white file:px-3 file:py-1.5 file:text-black"
+        className="block w-full text-xs file:mr-3 file:rounded file:border-0 file:bg-foreground file:px-3 file:py-1.5 file:text-background"
       />
       <input
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        placeholder="Label (opsional, mis. Lantai 1 Electrical)"
-        className="mt-3 w-full rounded border border-white/20 bg-transparent px-3 py-2 text-sm outline-none focus:border-white/50"
+        placeholder={strings.label}
+        className="mt-3 w-full rounded border border-foreground/20 bg-transparent px-3 py-2 text-sm outline-none focus:border-foreground/50"
       />
       <button
         onClick={onUpload}
         disabled={busy}
-        className="mt-3 rounded bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50"
+        className="mt-3 rounded bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
       >
-        {busy ? 'Meng-upload…' : 'Upload'}
+        {busy ? strings.uploading : strings.upload}
       </button>
 
       {busy && (
         <div className="mt-3">
-          <div className="h-2 w-full overflow-hidden rounded bg-white/10">
-            <div className="h-full bg-white transition-all" style={{ width: `${pct}%` }} />
+          <div className="h-2 w-full overflow-hidden rounded bg-foreground/10">
+            <div className="h-full bg-foreground transition-all" style={{ width: `${pct}%` }} />
           </div>
           <p className="mt-1 text-xs opacity-60">{status} {pct > 0 && `${pct}%`}</p>
         </div>

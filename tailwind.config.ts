@@ -10,6 +10,9 @@ const config: Config = {
     extend: {
       colors: {
         accent: '#ffc107',
+        // Mengikuti CSS variable -> otomatis ganti saat light/dark.
+        background: 'var(--background)',
+        foreground: 'var(--foreground)',
       },
     },
   },

@@ -57,12 +57,12 @@ namespace RevitWebViewer
                 string resultMsg = Task.Run(() => DoPushAsync(cfg, ifcPath, glbPath, pushedBy))
                     .GetAwaiter().GetResult();
 
-                TaskDialog.Show("Revit Web Viewer — Sukses", resultMsg);
+                TaskDialog.Show("Revit Web Viewer — Sukses (build " + AppInfo.BuildTag + ")", resultMsg);
                 return Result.Succeeded;
             }
             catch (Exception ex)
             {
-                TaskDialog.Show("Revit Web Viewer — Gagal", ex.Message);
+                TaskDialog.Show("Revit Web Viewer — Gagal (build " + AppInfo.BuildTag + ")", ex.Message);
                 message = ex.Message;
                 return Result.Failed;
             }

@@ -78,6 +78,30 @@ Kalau cuma mau generate SQL kategori untuk di-paste manual ke SQL Editor:
 node scripts/ifc-to-elements-sql.mjs <file.ifc> <project_id> > elements.sql
 ```
 
+## Kecilkan GLB besar (Draco) — untuk model >200MB
+
+Model IFC besar sering menghasilkan GLB ratusan MB yang berat di-load di web.
+`push-model.mjs` sudah **otomatis** meng-kompres GLB dengan Draco
+(KHR_draco_mesh_compression) sebelum upload — biasanya hemat 70–90%.
+
+Untuk alur **upload manual lewat website** (kamu convert IFC→GLB sendiri via
+IfcConvert / Blender / converter online), kecilkan dulu sebelum di-upload:
+
+```bash
+node scripts/compress-glb.mjs <input.glb> [output.glb]
+```
+
+Hasilnya (`<input>-draco.glb`) yang di-upload di halaman Kelola. Kalau file
+sangat besar dan kena "heap out of memory", jalankan dengan heap lebih besar:
+
+```bash
+node --max-old-space-size=8192 scripts/compress-glb.mjs <input.glb>
+```
+
+Kompresi butuh dependency dev (`@gltf-transform/*`, `draco3dgltf`) — sudah
+masuk `package.json`, cukup `npm install`. Viewer sudah mendukung GLB Draco
+(decoder di-serve dari `public/draco`, tanpa CDN).
+
 ## Deploy
 
 Push ke GitHub → connect repo ke Vercel → isi env vars di

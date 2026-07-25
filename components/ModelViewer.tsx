@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { getSupabase } from '@/lib/supabase';
@@ -215,6 +216,11 @@ export default function ModelViewer({
 
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     const loader = new GLTFLoader();
+    // Dukung GLB terkompresi Draco (KHR_draco_mesh_compression). Decoder di-serve
+    // dari /public/draco (lihat public/draco), jadi tidak bergantung CDN.
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('/draco/');
+    loader.setDRACOLoader(dracoLoader);
     loader.load(
       glbUrl,
       (gltf) => {
@@ -241,12 +247,14 @@ export default function ModelViewer({
         scene.add(gltf.scene);
         modelRootRef.current = gltf.scene;
         frameCameraToObject(gltf.scene);
+        dracoLoader.dispose(); // bebaskan worker decoder Draco
       },
       undefined,
       (err) => {
         // Kalau GLB gagal di-load (CORS, URL salah, file rusak), catat di
         // console biar gampang di-diagnosa daripada layar diam kosong.
         console.error('Gagal load GLB:', glbUrl, err);
+        dracoLoader.dispose();
       }
     );
   }

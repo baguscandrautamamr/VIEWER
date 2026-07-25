@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -62,7 +63,9 @@ namespace RevitWebViewer
             }
             catch (Exception ex)
             {
-                TaskDialog.Show("Revit Web Viewer — Gagal (build " + AppInfo.BuildTag + ")", ex.Message);
+                string detail = FormatError(ex);
+                WriteLog(detail);
+                ErrorDialog.Display("Revit Web Viewer — Gagal (build " + AppInfo.BuildTag + ")", detail);
                 message = ex.Message;
                 return Result.Failed;
             }
@@ -70,6 +73,40 @@ namespace RevitWebViewer
             {
                 try { Directory.Delete(workDir, true); } catch { /* biarin */ }
             }
+        }
+
+        // Detail teknis lengkap buat diagnosa: type + message + stack trace,
+        // termasuk inner exception. Ini yang menunjukkan API mana yang gagal.
+        private static string FormatError(Exception ex)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Build: " + AppInfo.BuildTag);
+            var e = ex;
+            int depth = 0;
+            while (e != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine("[" + depth + "] " + e.GetType().FullName);
+                sb.AppendLine("Message: " + e.Message);
+                sb.AppendLine("Stack trace:");
+                sb.AppendLine(e.StackTrace ?? "(tidak ada)");
+                e = e.InnerException;
+                depth++;
+            }
+            return sb.ToString();
+        }
+
+        private static void WriteLog(string detail)
+        {
+            try
+            {
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "RevitWebViewer");
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, "last-error.txt"), detail);
+            }
+            catch { /* log gagal, tidak fatal */ }
         }
 
         // Ambil config. Kalau belum ada / tidak valid, tawarkan buka form

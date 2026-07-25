@@ -5,6 +5,6 @@ namespace RevitWebViewer
     // lagi tapi tag ini berubah, berarti DLL sudah ter-update).
     public static class AppInfo
     {
-        public const string BuildTag = "2026-07-25d-project-ui";
+        public const string BuildTag = "2026-07-25e-diag";
     }
 }

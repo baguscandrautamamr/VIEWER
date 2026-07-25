@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
+import { getSupabase } from '@/lib/supabase';
 import { locales, type Locale } from '@/lib/i18n';
 
 interface ModelViewerProps {
@@ -13,6 +14,8 @@ interface ModelViewerProps {
   locale?: Locale;
   onElementSelect?: (globalId: string | null) => void;
 }
+
+type IsolateMode = 'object' | 'category';
 
 const DIMMED_OPACITY = 0.12;
 const HIGHLIGHT_DURATION_MS = 3000;
@@ -30,9 +33,45 @@ export default function ModelViewer({
   const modelRootRef = useRef<THREE.Object3D | null>(null);
   const meshesByGlobalId = useRef<Map<string, THREE.Mesh>>(new Map());
   const originalMaterials = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
+  // GlobalId -> category, diambil dari tabel `elements`. Dipakai untuk
+  // isolate per-kategori (klik 1 lighting -> semua lighting).
+  const categoryByGlobalId = useRef<Map<string, string>>(new Map());
+  // Mode dibaca dari ref di dalam handler klik (handler dipasang sekali saat
+  // mount, jadi tidak lihat perubahan state biasa). State dipakai untuk UI.
+  const modeRef = useRef<IsolateMode>('object');
+
+  const [mode, setMode] = useState<IsolateMode>('object');
+  const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
 
   const t = locales[locale].viewer;
+
+  function changeMode(next: IsolateMode) {
+    modeRef.current = next;
+    setMode(next);
+  }
+
+  // Ambil peta kategori tiap elemen dari Supabase (anon, dibatasi RLS).
+  // Kalau tabel `elements` masih kosong, mode kategori otomatis fallback ke
+  // isolate 1 objek — jadi tetap jalan, cuma belum grouping.
+  useEffect(() => {
+    let active = true;
+    getSupabase()
+      .from('elements')
+      .select('global_id, category')
+      .eq('project_id', projectId)
+      .then(({ data }) => {
+        if (!active || !data) return;
+        const map = new Map<string, string>();
+        data.forEach((row) => {
+          if (row.category) map.set(row.global_id as string, row.category as string);
+        });
+        categoryByGlobalId.current = map;
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId]);
 
   // Setup scene sekali saat mount. Loading & reload GLB dipisah ke fungsi
   // loadModel supaya bisa dipanggil ulang saat ada push baru dari Revit.
@@ -82,10 +121,19 @@ export default function ModelViewer({
 
       if (intersects.length > 0) {
         const target = intersects[0].object as THREE.Mesh;
-        isolateMesh(target);
-        onElementSelect?.(target.userData.globalId ?? null);
+        const gid = (target.userData.globalId as string) ?? null;
+
+        if (modeRef.current === 'category') {
+          isolateByCategory(target);
+        } else {
+          isolateMesh(target);
+        }
+
+        setSelected(gid ? { globalId: gid, category: categoryByGlobalId.current.get(gid) ?? null } : null);
+        onElementSelect?.(gid);
       } else {
         resetIsolation();
+        setSelected(null);
         onElementSelect?.(null);
       }
     }
@@ -188,22 +236,37 @@ export default function ModelViewer({
     controls.update();
   }
 
+  // Mode "Objek": cuma 1 mesh yang diklik yang tetap terang.
   function isolateMesh(target: THREE.Mesh) {
     meshesByGlobalId.current.forEach((mesh) => {
-      if (mesh === target) {
-        const original = originalMaterials.current.get(mesh);
-        if (original) mesh.material = original;
-      } else {
-        dimMesh(mesh);
-      }
+      if (mesh === target) restoreMesh(mesh);
+      else dimMesh(mesh);
+    });
+  }
+
+  // Mode "Kategori": semua mesh dengan kategori sama seperti yang diklik
+  // tetap terang. Kalau elemen yang diklik belum punya data kategori,
+  // fallback ke isolate 1 objek biar tetap ada efeknya.
+  function isolateByCategory(target: THREE.Mesh) {
+    const targetCat = categoryByGlobalId.current.get(target.userData.globalId as string) ?? null;
+    if (!targetCat) {
+      isolateMesh(target);
+      return;
+    }
+    meshesByGlobalId.current.forEach((mesh) => {
+      const cat = categoryByGlobalId.current.get(mesh.userData.globalId as string) ?? null;
+      if (cat === targetCat) restoreMesh(mesh);
+      else dimMesh(mesh);
     });
   }
 
   function resetIsolation() {
-    meshesByGlobalId.current.forEach((mesh) => {
-      const original = originalMaterials.current.get(mesh);
-      if (original) mesh.material = original;
-    });
+    meshesByGlobalId.current.forEach((mesh) => restoreMesh(mesh));
+  }
+
+  function restoreMesh(mesh: THREE.Mesh) {
+    const original = originalMaterials.current.get(mesh);
+    if (original) mesh.material = original;
   }
 
   function dimMesh(mesh: THREE.Mesh) {
@@ -231,14 +294,54 @@ export default function ModelViewer({
     }, HIGHLIGHT_DURATION_MS);
   }
 
+  const btnBase = 'rounded px-2 py-1 text-xs transition-colors';
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
+
       <div className="pointer-events-none absolute left-3 top-3 text-xs opacity-70">
         {t.isolateHint}
       </div>
+
+      {/* Kontrol mode isolate + reset */}
+      <div className="absolute right-3 top-3 flex items-center gap-2">
+        <div className="flex overflow-hidden rounded border border-white/20 bg-black/50 backdrop-blur">
+          <button
+            onClick={() => changeMode('object')}
+            className={`${btnBase} ${mode === 'object' ? 'bg-accent text-black' : 'text-white'}`}
+          >
+            {t.modeObject}
+          </button>
+          <button
+            onClick={() => changeMode('category')}
+            className={`${btnBase} ${mode === 'category' ? 'bg-accent text-black' : 'text-white'}`}
+          >
+            {t.modeCategory}
+          </button>
+        </div>
+        <button
+          onClick={() => {
+            resetIsolation();
+            setSelected(null);
+          }}
+          className={`${btnBase} border border-white/20 bg-black/50 text-white backdrop-blur`}
+        >
+          {t.resetView}
+        </button>
+      </div>
+
+      {/* Info elemen terpilih */}
+      {selected && (
+        <div className="absolute bottom-3 left-3 rounded bg-black/70 px-3 py-2 text-xs text-white">
+          <div className="opacity-60">{t.selected}</div>
+          <div className="font-medium">{selected.category ?? t.noCategory}</div>
+          <div className="opacity-50">{selected.globalId}</div>
+        </div>
+      )}
+
       {liveUpdateMessage && (
-        <div className="absolute bottom-3 left-3 rounded bg-black/70 px-3 py-1 text-xs text-white">
+        <div className="absolute bottom-3 right-3 rounded bg-black/70 px-3 py-1 text-xs text-white">
           {liveUpdateMessage}
         </div>
       )}

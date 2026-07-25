@@ -1,10 +1,14 @@
 export const locales = {
   id: {
     viewer: {
-      resetView: 'Reset Tampilan',
+      resetView: 'Reset',
       isolateHint: 'Klik object untuk isolate',
       liveUpdate: 'Versi terbaru diterima, memperbarui tampilan...',
       downloadRvt: 'Unduh File Revit',
+      modeObject: 'Objek',
+      modeCategory: 'Kategori',
+      selected: 'Terpilih',
+      noCategory: 'Tanpa kategori',
     },
     sheets: {
       title: 'Daftar Sheet',
@@ -16,10 +20,14 @@ export const locales = {
   },
   en: {
     viewer: {
-      resetView: 'Reset View',
+      resetView: 'Reset',
       isolateHint: 'Click an object to isolate',
       liveUpdate: 'New version received, updating view...',
       downloadRvt: 'Download Revit File',
+      modeObject: 'Object',
+      modeCategory: 'Category',
+      selected: 'Selected',
+      noCategory: 'No category',
     },
     sheets: {
       title: 'Sheet List',

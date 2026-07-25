@@ -10,7 +10,12 @@ namespace RevitWebViewer
 {
     // Tombol "Export & Push". Alur meniru scripts/push-model.mjs:
     // export IFC (view aktif) -> IfcConvert -> upload GLB -> kategori -> versi baru.
-    [Transaction(TransactionMode.ReadOnly)]
+    //
+    // Manual (bukan ReadOnly): export IFC Revit membuka transaction sendiri secara
+    // internal. Mode ReadOnly memblokir semua transaction -> error "Modifying is
+    // forbidden because the document has no open transaction." Manual membiarkan
+    // exporter mengelola transaction-nya sendiri; kita sendiri tidak mengubah model.
+    [Transaction(TransactionMode.Manual)]
     public class ExportPushCommand : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)

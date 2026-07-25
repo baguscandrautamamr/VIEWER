@@ -14,7 +14,12 @@ create table model_versions (
   id uuid primary key default gen_random_uuid(),
   project_id uuid references projects(id) on delete cascade,
   version_number int not null,
-  glb_storage_path text not null,
+  -- Model GLB bisa disimpan di salah satu:
+  --   glb_drive_file_id  -> Google Drive (disajikan viewer lewat /api/model/[id])
+  --   glb_storage_path   -> URL publik Supabase Storage (cara lama)
+  -- Salah satu wajib ada; keduanya nullable supaya fleksibel.
+  glb_storage_path text,
+  glb_drive_file_id text,
   rvt_drive_file_id text,
   changed_global_ids text[] default '{}',
   pushed_at timestamptz default now(),
@@ -74,3 +79,10 @@ create policy "anon read elements"
 -- publication `supabase_realtime`. Tanpa baris ini, INSERT ke model_versions
 -- TIDAK akan sampai ke client yang subscribe di lib/realtime.ts.
 alter publication supabase_realtime add table model_versions;
+
+-- ---------------------------------------------------------------------------
+-- MIGRASI untuk database yang SUDAH dibuat sebelum kolom glb_drive_file_id ada.
+-- Aman dijalankan berulang (idempotent). Jalankan di SQL Editor sekali.
+-- ---------------------------------------------------------------------------
+alter table model_versions add column if not exists glb_drive_file_id text;
+alter table model_versions alter column glb_storage_path drop not null;

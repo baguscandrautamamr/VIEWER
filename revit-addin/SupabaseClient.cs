@@ -63,13 +63,13 @@ namespace RevitWebViewer
             return _cfg.SupabaseUrl + "/storage/v1/object/public/" + _cfg.Bucket + "/" + storagePath;
         }
 
-        public async Task<string> InsertModelVersionAsync(int version, string publicUrl, string pushedBy)
+        public async Task<string> InsertModelVersionAsync(int version, string glbDriveFileId, string pushedBy)
         {
             var payload = new JObject
             {
                 ["project_id"] = _cfg.ProjectId,
                 ["version_number"] = version,
-                ["glb_storage_path"] = publicUrl,
+                ["glb_drive_file_id"] = glbDriveFileId,
                 ["pushed_by"] = pushedBy
             };
             var res = await PostJsonAsync(_cfg.SupabaseUrl + "/rest/v1/model_versions",

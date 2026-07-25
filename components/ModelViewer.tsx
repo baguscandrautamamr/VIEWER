@@ -34,6 +34,17 @@ export default function ModelViewer({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  // 6 bidang potong (section box). Urutan: X+, X−, Y+, Y−, Z+, Z−.
+  // Normal menghadap ke DALAM box; constant di-set dari ukuran model.
+  const clipPlanesRef = useRef<THREE.Plane[]>([
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, 0, -1), 0),
+    new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+  ]);
   const modelRootRef = useRef<THREE.Object3D | null>(null);
   // Ukuran bounding box model (buat menghitung jarak kamera preset).
   const modelSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
@@ -52,6 +63,10 @@ export default function ModelViewer({
   // Status load model: buat overlay "Memuat…"/"Gagal" supaya layar tidak blank
   // tanpa penjelasan (mis. saat GLB besar / Draco gagal decode).
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  // Section box: on/off + posisi tiap sisi (0..1 fraksi dari setengah ukuran
+  // model; 1 = di tepi/tidak memotong, 0 = di tengah).
+  const [sectionOn, setSectionOn] = useState(false);
+  const [clip, setClip] = useState({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
 
   const t = locales[locale].viewer;
 
@@ -104,6 +119,7 @@ export default function ModelViewer({
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -272,6 +288,37 @@ export default function ModelViewer({
     if (modelRootRef.current) frameCameraToObject(modelRootRef.current);
   }
 
+  // Terapkan section box: hitung constant tiap bidang dari ukuran model, lalu
+  // pasang ke renderer.clippingPlanes (global -> memotong semua objek). Kalau
+  // section off, kosongkan supaya tidak ada potongan.
+  function applyClipping() {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const s = modelSizeRef.current;
+    const hx = s.x / 2 || 1;
+    const hy = s.y / 2 || 1;
+    const hz = s.z / 2 || 1;
+    const [pXmax, pXmin, pYmax, pYmin, pZmax, pZmin] = clipPlanesRef.current;
+    pXmax.constant = hx * clip.xMax;
+    pXmin.constant = hx * clip.xMin;
+    pYmax.constant = hy * clip.yMax;
+    pYmin.constant = hy * clip.yMin;
+    pZmax.constant = hz * clip.zMax;
+    pZmin.constant = hz * clip.zMin;
+    renderer.clippingPlanes = sectionOn ? clipPlanesRef.current : [];
+  }
+
+  // Re-apply saat toggle/slider berubah, atau saat model baru selesai load
+  // (ukuran model baru diketahui setelah 'ready').
+  useEffect(() => {
+    applyClipping();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionOn, clip, loadState]);
+
+  function resetSection() {
+    setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+  }
+
   // Model IFC dari Revit sering pakai koordinat dunia yang jauh dari origin
   // (survey/shared coords) dan ukurannya bervariasi. Tanpa ini, kamera default
   // (10,10,10) nunjuk ke (0,0,0) dan modelnya "di luar layar" -> viewport hitam.
@@ -392,6 +439,14 @@ export default function ModelViewer({
           {t.focus}
         </button>
         <button
+          onClick={() => setSectionOn((v) => !v)}
+          className={`${btnBase} border border-white/20 backdrop-blur ${
+            sectionOn ? 'bg-accent text-black' : 'bg-black/50 text-white'
+          }`}
+        >
+          {t.section}
+        </button>
+        <button
           onClick={() => {
             resetIsolation();
             setSelected(null);
@@ -401,6 +456,46 @@ export default function ModelViewer({
           {t.resetView}
         </button>
       </div>
+
+      {/* Panel section box: 6 slider (X/Y/Z, + & −). */}
+      {sectionOn && (
+        <div className="absolute right-3 top-14 w-56 rounded border border-white/20 bg-black/60 p-3 text-white backdrop-blur">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-medium">{t.section}</span>
+            <button
+              onClick={resetSection}
+              className="text-[11px] opacity-70 hover:opacity-100"
+            >
+              {t.resetView}
+            </button>
+          </div>
+          {(
+            [
+              ['xMax', 'X +'],
+              ['xMin', 'X −'],
+              ['yMax', 'Y +'],
+              ['yMin', 'Y −'],
+              ['zMax', 'Z +'],
+              ['zMin', 'Z −'],
+            ] as [keyof typeof clip, string][]
+          ).map(([field, label]) => (
+            <label key={field} className="mb-1.5 flex items-center gap-2 text-[11px]">
+              <span className="w-8 shrink-0 opacity-70">{label}</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={clip[field]}
+                onChange={(e) =>
+                  setClip((c) => ({ ...c, [field]: parseFloat(e.target.value) }))
+                }
+                className="w-full accent-accent"
+              />
+            </label>
+          ))}
+        </div>
+      )}
 
       {/* Overlay status load: memuat / gagal (biar tidak blank tanpa info). */}
       {loadState !== 'ready' && (

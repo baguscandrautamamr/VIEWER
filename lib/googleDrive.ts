@@ -1,6 +1,17 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
+// Ambil folder ID yang bersih dari GOOGLE_DRIVE_FOLDER_ID. Toleran kalau
+// yang ke-paste malah URL lengkap (.../folders/<ID>?hl=ID) atau ada ?id=<ID>.
+function driveFolderId(): string {
+  const raw = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
+  const folders = raw.match(/\/folders\/([^/?#]+)/);
+  if (folders) return folders[1];
+  const idParam = raw.match(/[?&]id=([^&]+)/);
+  if (idParam) return idParam[1];
+  return raw;
+}
+
 // Access token OAuth yang fresh (di-refresh otomatis dari refresh_token).
 // Dipakai untuk bikin resumable upload session.
 async function getAccessToken(): Promise<string> {
@@ -22,7 +33,7 @@ export async function createResumableUpload(
   mimeType = 'model/gltf-binary'
 ): Promise<string> {
   const token = await getAccessToken();
-  const metadata = { name: fileName, parents: [process.env.GOOGLE_DRIVE_FOLDER_ID!] };
+  const metadata = { name: fileName, parents: [driveFolderId()] };
 
   const res = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id',
@@ -81,7 +92,7 @@ export async function uploadRvtFile(fileName: string, fileBuffer: Buffer) {
   const res = await drive.files.create({
     requestBody: {
       name: fileName,
-      parents: [process.env.GOOGLE_DRIVE_FOLDER_ID!],
+      parents: [driveFolderId()],
     },
     media: {
       mimeType: 'application/octet-stream',

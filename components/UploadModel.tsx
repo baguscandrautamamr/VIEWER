@@ -34,9 +34,10 @@ export default function UploadModel({ projectId }: { projectId: string }) {
       if (!sess.ok) throw new Error((await sess.json()).error || 'Gagal minta session');
       const { uploadUri } = await sess.json();
 
-      // 2) PUT byte ke Google (pakai XHR biar ada progress).
+      // 2) Kirim file per-chunk lewat proxy app -> Google (hindari CORS + limit Vercel).
       setStatus('Meng-upload ke Google Drive…');
-      const driveFileId = await putWithProgress(uploadUri, file, setPct);
+      const driveFileId = await uploadChunked(uploadUri, file, setPct);
+      if (!driveFileId) throw new Error('Drive tidak mengembalikan file id.');
 
       // 3) Catat ke model_files.
       setStatus('Menyimpan…');
@@ -96,34 +97,35 @@ export default function UploadModel({ projectId }: { projectId: string }) {
   );
 }
 
-// PUT file ke resumable session URI dengan progress. Return Drive file id.
-function putWithProgress(
+// Upload file per-chunk lewat proxy app (/api/drive/upload-chunk) -> Google.
+// Chunk 4MB (kelipatan 256KB, syarat resumable Google) & < limit Vercel.
+// Return Drive file id.
+async function uploadChunked(
   uploadUri: string,
   file: File,
   onProgress: (pct: number) => void
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', uploadUri);
-    xhr.setRequestHeader('Content-Type', 'model/gltf-binary');
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const id = JSON.parse(xhr.responseText).id;
-          if (!id) return reject(new Error('Drive tidak mengembalikan file id.'));
-          resolve(id);
-        } catch {
-          reject(new Error('Respons Drive tidak valid.'));
-        }
-      } else {
-        reject(new Error(`Upload ke Drive gagal (${xhr.status}). ${xhr.responseText?.slice(0, 200)}`));
-      }
-    };
-    xhr.onerror = () =>
-      reject(new Error('Upload ke Drive gagal (CORS/jaringan). Kabari admin untuk cek konfigurasi.'));
-    xhr.send(file);
-  });
+): Promise<string | null> {
+  const CHUNK = 4 * 1024 * 1024; // 4MB
+  const total = file.size;
+  let start = 0;
+  let id: string | null = null;
+
+  while (start < total) {
+    const end = Math.min(start + CHUNK, total);
+    const chunk = file.slice(start, end);
+    const range = `bytes ${start}-${end - 1}/${total}`;
+
+    const res = await fetch('/api/drive/upload-chunk', {
+      method: 'POST',
+      headers: { 'x-upload-uri': uploadUri, 'x-content-range': range },
+      body: chunk,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `Chunk gagal (${res.status})`);
+    if (j.done && j.id) id = j.id;
+
+    start = end;
+    onProgress(Math.round((end / total) * 100));
+  }
+  return id;
 }

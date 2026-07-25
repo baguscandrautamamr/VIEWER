@@ -93,13 +93,16 @@ export default function PresentClient({
           </div>
         )}
 
-        {/* Tombol buka sidebar (muncul saat sidebar tertutup & ada sheet). */}
+        {/* Tab buka sidebar: tempel di tepi kanan & center vertikal supaya
+            TIDAK menutupi kontrol Objek/Kategori/Reset di pojok kanan atas. */}
         {sheets.length > 0 && !sidebarOpen && (
           <button
             onClick={() => setSidebarOpen(true)}
-            className="absolute right-3 top-3 z-10 rounded border border-foreground/20 bg-background/80 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:border-foreground/40"
+            className="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-l-md border border-r-0 border-foreground/20 bg-background/85 py-2 pl-2 pr-1.5 text-xs backdrop-blur transition-colors hover:border-foreground/40"
+            title={sheetStrings.show}
           >
-            {sheetStrings.show} ({sheets.length})
+            <span aria-hidden>◀</span>
+            <span>{sheetStrings.show} ({sheets.length})</span>
           </button>
         )}
       </div>

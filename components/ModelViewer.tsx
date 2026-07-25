@@ -156,6 +156,11 @@ export default function ModelViewer({
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
     }
+    // Pakai ResizeObserver (bukan cuma window.resize) supaya canvas ikut
+    // menyesuaikan saat container melebar/menyempit — mis. waktu sidebar sheet
+    // dibuka/ditutup, viewer harus langsung isi ruang penuh.
+    const resizeObserver = new ResizeObserver(() => handleResize());
+    resizeObserver.observe(container);
     window.addEventListener('resize', handleResize);
 
     // Subscribe ke perubahan push dari Revit — lihat lib/realtime.ts.
@@ -169,6 +174,7 @@ export default function ModelViewer({
     return () => {
       renderer.domElement.removeEventListener('click', handleClick);
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       unsubscribe(channel);
       renderer.dispose();
       container.removeChild(renderer.domElement);

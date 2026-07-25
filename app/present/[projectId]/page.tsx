@@ -58,7 +58,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
 
   const { data: sheetRows } = await supabase
     .from('sheets')
-    .select('id, sheet_number, sheet_name, camera_preset, sort_order')
+    .select('id, sheet_number, sheet_name, camera_preset, sort_order, is_visible')
     .eq('project_id', projectId)
     .order('sort_order', { ascending: true });
 
@@ -66,11 +66,14 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
     id: f.id as string,
     label: (f.label as string) || 'Model',
   }));
-  const sheets: SheetItem[] = (sheetRows ?? []).map((s) => ({
-    id: s.id as string,
-    title: `${s.sheet_number}${s.sheet_name ? ' — ' + s.sheet_name : ''}`,
-    cameraPreset: (s.camera_preset as string) ?? null,
-  }));
+  const sheets: SheetItem[] = (sheetRows ?? [])
+    // Sembunyikan sheet yang di-uncheck di halaman Kelola (null = tampil).
+    .filter((s) => s.is_visible !== false)
+    .map((s) => ({
+      id: s.id as string,
+      title: `${s.sheet_number}${s.sheet_name ? ' — ' + s.sheet_name : ''}`,
+      cameraPreset: (s.camera_preset as string) ?? null,
+    }));
   const fallbackUrl = latestVersion ? `/api/model/${latestVersion.id}` : null;
 
   const hasAnything = files.length > 0 || fallbackUrl || sheets.length > 0;
@@ -108,7 +111,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
         fallbackUrl={fallbackUrl}
         locale={locale}
         sheets={sheets}
-        sheetsTitle={strings.sheets.title}
+        sheetStrings={strings.sheets}
       />
     </main>
   );

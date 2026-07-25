@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase';
 import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import PresentClient, { type ModelFileOption, type SheetItem } from '@/components/PresentClient';
@@ -89,6 +90,9 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
     <main className="flex h-screen flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
+          <Link href="/" className="text-xs opacity-60 hover:opacity-100">
+            {strings.nav.backToProjects}
+          </Link>
           <span className="text-sm font-medium">{project.name}</span>
           {latestVersion && (
             <VersionBadge

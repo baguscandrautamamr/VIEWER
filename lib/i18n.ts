@@ -9,7 +9,11 @@ export const locales = {
       modeCategory: 'Kategori',
       selected: 'Terpilih',
       noCategory: 'Tanpa kategori',
+      focus: 'Fokus',
+      loading: 'Memuat model…',
+      loadError: 'Gagal memuat model. Coba refresh halaman.',
     },
+    nav: { backToProjects: '← Daftar project' },
     sheets: {
       title: 'Sheet',
       show: 'Sheet',
@@ -72,7 +76,11 @@ export const locales = {
       modeCategory: 'Category',
       selected: 'Selected',
       noCategory: 'No category',
+      focus: 'Focus',
+      loading: 'Loading model…',
+      loadError: 'Failed to load model. Try refreshing the page.',
     },
+    nav: { backToProjects: '← Back to projects' },
     sheets: {
       title: 'Sheets',
       show: 'Sheets',

@@ -5,7 +5,9 @@
 //        --(parse family)--> kategori --> tabel elements
 //        --> baris baru di model_versions (versi naik, viewer auto-reload)
 //
-// Cuma butuh Node 18+ (pakai fetch bawaan) — TIDAK perlu `npm install`.
+// Butuh Node 18+ (pakai fetch bawaan). Kompresi Draco butuh dep dev
+// (@gltf-transform/*, draco3dgltf) — jalankan `npm install` dulu. Kalau dep
+// belum ada, kompresi otomatis dilewati & GLB di-upload apa adanya.
 //
 // Pemakaian:
 //   node scripts/push-model.mjs <file.ifc> <project_id> [pushed_by]
@@ -86,6 +88,22 @@ async function main() {
   }
   if (!fs.existsSync(tmpGlb)) die('GLB tidak terbentuk — cek output IfcConvert di atas.');
 
+  // 1b) Kompresi Draco (best-effort). Kecilkan GLB 70–90% supaya model besar
+  // (>200MB) enteng di web. Kalau dep gltf-transform belum di-install, lewati
+  // saja dan upload GLB apa adanya.
+  let glbToUpload = tmpGlb;
+  const tmpGlbC = path.join(os.tmpdir(), `push-${Date.now()}-draco.glb`);
+  try {
+    const { compressGlb, fmtMB } = await import('./lib/compress-glb.mjs');
+    console.error('▶ Kompresi Draco ...');
+    const { before, after } = await compressGlb(tmpGlb, tmpGlbC);
+    const pct = Math.round((1 - after / before) * 100);
+    console.error(`  ${fmtMB(before)} -> ${fmtMB(after)} (hemat ${pct}%)`);
+    glbToUpload = tmpGlbC;
+  } catch (e) {
+    console.error(`  ⚠ Lewati kompresi (${e.message}). Upload GLB asli.`);
+  }
+
   // 2) Parse kategori dari IFC
   const rows = parseIfcElements(fs.readFileSync(ifcPath, 'utf8'));
   console.error(`▶ ${rows.length} elemen, ${summarize(rows).length} kategori terbaca.`);
@@ -102,7 +120,7 @@ async function main() {
   const upRes = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${storagePath}`, {
     method: 'POST',
     headers: { ...authHeaders, 'Content-Type': 'model/gltf-binary', 'x-upsert': 'true' },
-    body: fs.readFileSync(tmpGlb),
+    body: fs.readFileSync(glbToUpload),
   });
   if (!upRes.ok) die(`Upload GLB gagal: ${upRes.status}\n${await upRes.text()}`);
   const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${storagePath}`;
@@ -148,6 +166,7 @@ async function main() {
   }
 
   fs.unlinkSync(tmpGlb);
+  if (fs.existsSync(tmpGlbC)) fs.unlinkSync(tmpGlbC);
 
   console.error(`\n✅ Push sukses — versi v${nextVersion}.`);
   console.error(`   Link presentasi (tambahkan domain kamu): ${presentHint}`);

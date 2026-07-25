@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase';
 import { isAdminAuthed, adminPasswordConfigured } from '@/lib/adminAuth';
+import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import AdminLogin from '@/components/AdminLogin';
 import UploadModel from '@/components/UploadModel';
 import DeleteModelFileButton from '@/components/DeleteModelFileButton';
+import UiToggles from '@/components/UiToggles';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,21 +22,20 @@ export default async function ManagePage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
+  const [t, locale, theme] = await Promise.all([getStrings(), getLocale(), getTheme()]);
 
-  // Fitur upload wajib dilindungi password (biar Drive tidak bisa diisi orang lain).
   if (!adminPasswordConfigured()) {
     return (
       <main className="mx-auto max-w-lg p-6">
-        <h1 className="mb-2 text-lg font-medium">Kelola Model</h1>
-        <p className="rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-200">
-          Set env <b>VIEWER_ADMIN_PASSWORD</b> di Vercel dulu untuk memakai fitur
-          upload model, lalu redeploy.
+        <h1 className="mb-2 text-lg font-medium">{t.manage.title}</h1>
+        <p className="rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-500">
+          {t.manage.needPassword}
         </p>
       </main>
     );
   }
   if (!(await isAdminAuthed())) {
-    return <AdminLogin />;
+    return <AdminLogin t={t.login} />;
   }
 
   const supabase = createServiceClient();
@@ -54,31 +55,37 @@ export default async function ManagePage({
 
   return (
     <main className="mx-auto max-w-2xl p-6">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-medium">Kelola Model</h1>
+          <h1 className="text-lg font-medium">{t.manage.title}</h1>
           <p className="text-sm opacity-60">{project?.name ?? projectId}</p>
         </div>
-        <Link href="/" className="text-xs opacity-70 hover:opacity-100">
-          ← Daftar project
-        </Link>
+        <div className="flex items-center gap-3">
+          <UiToggles locale={locale} theme={theme} />
+          <Link href="/" className="text-xs opacity-70 hover:opacity-100">
+            {t.manage.backToList}
+          </Link>
+        </div>
       </div>
 
-      <UploadModel projectId={projectId} />
+      <UploadModel
+        projectId={projectId}
+        strings={{ title: t.manage.uploadTitle, label: t.manage.label, upload: t.manage.upload, uploading: t.manage.uploading }}
+      />
 
       <h2 className="mb-2 mt-6 text-sm font-medium opacity-70">
-        File model ({list.length})
+        {t.manage.fileList} ({list.length})
       </h2>
       {list.length === 0 ? (
-        <p className="rounded border border-white/10 p-4 text-sm opacity-60">
-          Belum ada file. Convert IFC→GLB (IfcConvert), lalu upload di atas.
+        <p className="rounded border border-foreground/10 p-4 text-sm opacity-60">
+          {t.manage.empty}
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
           {list.map((f) => (
             <li
               key={f.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-white/10 p-3"
+              className="flex items-center justify-between gap-3 rounded-lg border border-foreground/10 p-3"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm">{f.label || f.drive_file_id}</div>
@@ -86,7 +93,11 @@ export default async function ManagePage({
                   {f.created_at ? new Date(f.created_at).toLocaleString() : ''}
                 </div>
               </div>
-              <DeleteModelFileButton id={f.id} />
+              <DeleteModelFileButton
+                id={f.id}
+                label={t.manage.deleteFile}
+                confirmText={t.manage.confirmDeleteFile}
+              />
             </li>
           ))}
         </ul>

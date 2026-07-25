@@ -3,7 +3,15 @@
 import { useState } from 'react';
 
 // Copy link presentasi lengkap (origin + path) ke clipboard.
-export default function CopyLinkButton({ path }: { path: string }) {
+export default function CopyLinkButton({
+  path,
+  label = 'Copy link',
+  copiedLabel = 'Tersalin ✓',
+}: {
+  path: string;
+  label?: string;
+  copiedLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -20,9 +28,9 @@ export default function CopyLinkButton({ path }: { path: string }) {
   return (
     <button
       onClick={copy}
-      className="rounded border border-white/20 px-2 py-1 text-xs opacity-80 hover:opacity-100"
+      className="rounded border border-foreground/20 px-2 py-1 text-xs opacity-80 hover:opacity-100"
     >
-      {copied ? 'Tersalin ✓' : 'Copy link'}
+      {copied ? copiedLabel : label}
     </button>
   );
 }

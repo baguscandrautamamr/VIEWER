@@ -2,14 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Default = dark. */
 :root {
   --background: #0a0a0a;
   --foreground: #ededed;
   --accent: #ffc107;
 }
 
+/* Light theme (html.light). */
 html.light {
-  --background: #ffffff;
+  --background: #fafafa;
   --foreground: #171717;
 }
 

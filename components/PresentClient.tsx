@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import ModelViewer from './ModelViewer';
+import type { Locale } from '@/lib/i18n';
 
 export interface ModelFileOption {
   id: string;
@@ -15,10 +16,12 @@ export default function PresentClient({
   projectId,
   files,
   fallbackUrl,
+  locale = 'id',
 }: {
   projectId: string;
   files: ModelFileOption[];
   fallbackUrl: string | null;
+  locale?: Locale;
 }) {
   const [selected, setSelected] = useState<string | null>(files[0]?.id ?? null);
 
@@ -50,7 +53,7 @@ export default function PresentClient({
         </div>
       )}
       {/* key: paksa ModelViewer re-init saat ganti file */}
-      <ModelViewer key={url} projectId={projectId} initialGlbUrl={url} />
+      <ModelViewer key={url} projectId={projectId} initialGlbUrl={url} locale={locale} />
     </div>
   );
 }

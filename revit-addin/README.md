@@ -50,7 +50,7 @@ terpasang & Revit di-restart (langkah di bawah), buka tab **Revit Web Viewer**
 |---|---|
 | Supabase URL | `https://vruzkcpotrwlkxbfpqhg.supabase.co` |
 | Service Role Key | service_role key (Supabase → Project Settings → API). **RAHASIA.** |
-| Project ID | id project (mis. `222f2676-94d5-4f72-9a4c-9b033fef5a6e`) |
+| Project ID | pakai tombol **Pilih…** (ambil dari Supabase) atau **Buat…** (bikin project baru langsung dari Revit). Tidak perlu buka SQL Editor. |
 | Bucket | `models` (default) |
 | IfcConvert.exe | `C:\ifcconvert\IfcConvert.exe` (pakai tombol **Cari…**) |
 | Present Base URL | domain Vercel kamu (opsional, buat cetak link) |

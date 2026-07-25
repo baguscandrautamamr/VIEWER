@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace RevitWebViewer
@@ -65,7 +67,7 @@ namespace RevitWebViewer
             showKey.CheckedChanged += (s, e) => _key.UseSystemPasswordChar = !showKey.Checked;
             AddRow(layout, "", showKey);
 
-            AddRow(layout, "Project ID", _project);
+            AddRow(layout, "Project ID", BuildProjectRow());
             AddRow(layout, "Bucket", _bucket);
             AddRow(layout, "IfcConvert.exe", BuildIfcRow());
 
@@ -118,6 +120,111 @@ namespace RevitWebViewer
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                     _ifc.Text = dlg.FileName;
             }
+        }
+
+        // Baris Project ID: textbox + tombol "Pilih…" (ambil dari Supabase) &
+        // "Buat…" (insert project baru). Jadi tidak perlu buka SQL Editor.
+        private Control BuildProjectRow()
+        {
+            var row = new TableLayoutPanel
+            {
+                ColumnCount = 3,
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Margin = new Padding(0, 3, 0, 3)
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+
+            var pick = new Button { Text = "Pilih…", Width = 58, Anchor = AnchorStyles.Right };
+            var create = new Button { Text = "Buat…", Width = 58, Anchor = AnchorStyles.Right };
+            pick.Click += (s, e) => PickProject();
+            create.Click += (s, e) => CreateProject();
+
+            row.Controls.Add(_project, 0, 0);
+            row.Controls.Add(pick, 1, 0);
+            row.Controls.Add(create, 2, 0);
+            return row;
+        }
+
+        // Config sementara berisi URL + key dari field yang sedang diisi,
+        // buat manggil Supabase (pilih/buat project) sebelum config disimpan.
+        private Config CurrentConnConfig()
+        {
+            string url = _url.Text.Trim();
+            string key = _key.Text.Trim();
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+                throw new Exception("Isi Supabase URL dan Service Role Key dulu, baru pilih/buat project.");
+            return new Config { SupabaseUrl = url.TrimEnd('/'), ServiceRoleKey = key, Bucket = "models" };
+        }
+
+        private void PickProject()
+        {
+            try
+            {
+                Config cfg = CurrentConnConfig();
+                List<ProjectRow> rows;
+                UseWaitCursor = true;
+                try { rows = Task.Run(() => FetchProjectsAsync(cfg)).GetAwaiter().GetResult(); }
+                finally { UseWaitCursor = false; }
+
+                if (rows.Count == 0)
+                {
+                    MessageBox.Show(this, "Belum ada project di Supabase. Klik \"Buat…\" untuk membuat baru.",
+                        "Kosong", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var picker = new ProjectPickerForm(rows))
+                {
+                    if (picker.ShowDialog(this) == DialogResult.OK && picker.Selected != null)
+                        _project.Text = picker.Selected.Id;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Gagal ambil daftar project",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void CreateProject()
+        {
+            try
+            {
+                Config cfg = CurrentConnConfig();
+                using (var dlg = new NewProjectForm())
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                    string id;
+                    UseWaitCursor = true;
+                    try { id = Task.Run(() => CreateProjectAsync(cfg, dlg.ProjectName, dlg.Token)).GetAwaiter().GetResult(); }
+                    finally { UseWaitCursor = false; }
+
+                    _project.Text = id;
+                    MessageBox.Show(this, "Project dibuat.\nID: " + id, "Sukses",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Gagal buat project",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static async Task<List<ProjectRow>> FetchProjectsAsync(Config cfg)
+        {
+            using (var sb = new SupabaseClient(cfg))
+                return await sb.ListProjectsAsync();
+        }
+
+        private static async Task<string> CreateProjectAsync(Config cfg, string name, string token)
+        {
+            using (var sb = new SupabaseClient(cfg))
+                return await sb.CreateProjectAsync(name, token);
         }
 
         private Control BuildButtonBar()

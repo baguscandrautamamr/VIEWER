@@ -25,6 +25,9 @@ export default function ModelViewer({
 }: ModelViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const modelRootRef = useRef<THREE.Object3D | null>(null);
   const meshesByGlobalId = useRef<Map<string, THREE.Mesh>>(new Map());
   const originalMaterials = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
@@ -47,13 +50,16 @@ export default function ModelViewer({
       5000
     );
     camera.position.set(10, 10, 10);
+    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controlsRef.current = controls;
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -118,28 +124,68 @@ export default function ModelViewer({
 
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     const loader = new GLTFLoader();
-    loader.load(glbUrl, (gltf) => {
-      // Buang model versi lama sebelum pasang yang baru.
-      meshesByGlobalId.current.forEach((mesh) => scene.remove(mesh));
-      meshesByGlobalId.current.clear();
-      originalMaterials.current.clear();
+    loader.load(
+      glbUrl,
+      (gltf) => {
+        // Buang model versi lama sebelum pasang yang baru (group root, bukan
+        // per-mesh — mesh-nya anak dari group ini, bukan anak langsung scene).
+        if (modelRootRef.current) scene.remove(modelRootRef.current);
+        meshesByGlobalId.current.clear();
+        originalMaterials.current.clear();
 
-      gltf.scene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          // GlobalId ikut terbawa dari IFC -> glTF extras saat convert.
-          const globalId = child.userData?.gltfExtensions?.globalId ?? child.name;
-          child.userData.globalId = globalId;
-          meshesByGlobalId.current.set(globalId, child);
-          originalMaterials.current.set(child, child.material);
+        gltf.scene.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            // GlobalId ikut terbawa dari IFC -> glTF extras saat convert.
+            const globalId = child.userData?.gltfExtensions?.globalId ?? child.name;
+            child.userData.globalId = globalId;
+            meshesByGlobalId.current.set(globalId, child);
+            originalMaterials.current.set(child, child.material);
 
-          if (highlightIds.includes(globalId)) {
-            flashHighlight(child);
+            if (highlightIds.includes(globalId)) {
+              flashHighlight(child);
+            }
           }
-        }
-      });
+        });
 
-      scene.add(gltf.scene);
-    });
+        scene.add(gltf.scene);
+        modelRootRef.current = gltf.scene;
+        frameCameraToObject(gltf.scene);
+      },
+      undefined,
+      (err) => {
+        // Kalau GLB gagal di-load (CORS, URL salah, file rusak), catat di
+        // console biar gampang di-diagnosa daripada layar diam kosong.
+        console.error('Gagal load GLB:', glbUrl, err);
+      }
+    );
+  }
+
+  // Model IFC dari Revit sering pakai koordinat dunia yang jauh dari origin
+  // (survey/shared coords) dan ukurannya bervariasi. Tanpa ini, kamera default
+  // (10,10,10) nunjuk ke (0,0,0) dan modelnya "di luar layar" -> viewport hitam.
+  // Jadi: pindahkan center model ke origin, lalu set jarak & near/far kamera
+  // berdasarkan ukuran model biar selalu ke-frame pas.
+  function frameCameraToObject(object: THREE.Object3D) {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    object.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(object);
+    if (box.isEmpty()) return;
+
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    object.position.sub(center); // center model -> (0,0,0)
+
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const dist = maxDim * 1.8;
+    camera.near = Math.max(maxDim / 1000, 0.01);
+    camera.far = maxDim * 100;
+    camera.position.set(dist, dist * 0.8, dist);
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.update();
   }
 
   function isolateMesh(target: THREE.Mesh) {

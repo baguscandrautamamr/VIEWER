@@ -84,8 +84,20 @@ Model IFC besar sering menghasilkan GLB ratusan MB yang berat di-load di web.
 `push-model.mjs` sudah **otomatis** meng-kompres GLB dengan Draco
 (KHR_draco_mesh_compression) sebelum upload — biasanya hemat 70–90%.
 
-Untuk alur **upload manual lewat website** (kamu convert IFC→GLB sendiri via
-IfcConvert / Blender / converter online), kecilkan dulu sebelum di-upload:
+### Alur manual (upload lewat website)
+
+**Paling praktis — 1 command dari IFC langsung jadi GLB kecil siap upload:**
+
+```bash
+node scripts/ifc-to-web.mjs <file.ifc> [output.glb]
+```
+
+Ini menjalankan IfcConvert (IFC→GLB) lalu kompres Draco sekaligus. Hasilnya
+`<nama-ifc>-web.glb` — tinggal upload di halaman Kelola (Upload model GLB).
+Butuh `IFCCONVERT_PATH` di `.env.local` (atau `IfcConvert` ada di PATH).
+
+**Kalau GLB-nya sudah ada** (convert sendiri via Blender / converter online),
+tinggal kompres saja sebelum upload:
 
 ```bash
 node scripts/compress-glb.mjs <input.glb> [output.glb]

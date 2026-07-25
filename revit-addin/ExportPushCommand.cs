@@ -49,7 +49,18 @@ namespace RevitWebViewer
                 var opt = new IFCExportOptions();
                 opt.FileVersion = IFCVersion.IFC2x3CV2;
                 opt.FilterViewId = view.Id;
-                bool ok = doc.Export(workDir, "model", opt);
+
+                // PENTING: export IFC menulis balik IfcGUID ke elemen model, jadi
+                // WAJIB di dalam Transaction (beda dari export DWG/NWC yang read-only).
+                // Tanpa ini -> ModificationOutsideTransactionException
+                // ("Modifying is forbidden because the document has no open transaction").
+                bool ok;
+                using (var tx = new Transaction(doc, "Revit Web Viewer — Export IFC"))
+                {
+                    tx.Start();
+                    ok = doc.Export(workDir, "model", opt);
+                    tx.Commit();
+                }
                 if (!ok || !File.Exists(ifcPath))
                     throw new Exception("Export IFC gagal dari view aktif.");
 

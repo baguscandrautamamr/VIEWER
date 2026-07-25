@@ -49,6 +49,9 @@ export default function ModelViewer({
   const [mode, setMode] = useState<IsolateMode>('object');
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
+  // Status load model: buat overlay "Memuat…"/"Gagal" supaya layar tidak blank
+  // tanpa penjelasan (mis. saat GLB besar / Draco gagal decode).
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const t = locales[locale].viewer;
 
@@ -215,6 +218,7 @@ export default function ModelViewer({
   }, [cameraPreset]);
 
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
+    setLoadState('loading');
     const loader = new GLTFLoader();
     // Dukung GLB terkompresi Draco (KHR_draco_mesh_compression). Decoder di-serve
     // dari /public/draco (lihat public/draco), jadi tidak bergantung CDN.
@@ -247,16 +251,25 @@ export default function ModelViewer({
         scene.add(gltf.scene);
         modelRootRef.current = gltf.scene;
         frameCameraToObject(gltf.scene);
+        setLoadState('ready');
         dracoLoader.dispose(); // bebaskan worker decoder Draco
       },
       undefined,
       (err) => {
-        // Kalau GLB gagal di-load (CORS, URL salah, file rusak), catat di
-        // console biar gampang di-diagnosa daripada layar diam kosong.
+        // Kalau GLB gagal di-load (CORS, URL salah, file rusak, Draco tak ke-
+        // decode), catat di console + tampilkan overlay error, jangan blank.
         console.error('Gagal load GLB:', glbUrl, err);
+        setLoadState('error');
         dracoLoader.dispose();
       }
     );
+  }
+
+  // Tombol "Fokus": frame ulang kamera ke model saat ini (kalau model ke luar
+  // layar / user tersesat saat orbit). Aman dipanggil berulang — model sudah
+  // di-center ke origin, jadi cuma reposisi kamera.
+  function focusModel() {
+    if (modelRootRef.current) frameCameraToObject(modelRootRef.current);
   }
 
   // Model IFC dari Revit sering pakai koordinat dunia yang jauh dari origin
@@ -373,6 +386,12 @@ export default function ModelViewer({
           </button>
         </div>
         <button
+          onClick={focusModel}
+          className={`${btnBase} border border-white/20 bg-black/50 text-white backdrop-blur`}
+        >
+          {t.focus}
+        </button>
+        <button
           onClick={() => {
             resetIsolation();
             setSelected(null);
@@ -382,6 +401,21 @@ export default function ModelViewer({
           {t.resetView}
         </button>
       </div>
+
+      {/* Overlay status load: memuat / gagal (biar tidak blank tanpa info). */}
+      {loadState !== 'ready' && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div
+            className={`rounded px-4 py-2 text-sm ${
+              loadState === 'error'
+                ? 'bg-red-500/15 text-red-400'
+                : 'bg-black/50 text-white backdrop-blur'
+            }`}
+          >
+            {loadState === 'error' ? t.loadError : t.loading}
+          </div>
+        </div>
+      )}
 
       {/* Info elemen terpilih */}
       {selected && (

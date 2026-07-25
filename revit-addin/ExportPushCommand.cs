@@ -54,23 +54,35 @@ namespace RevitWebViewer
                 // WAJIB di dalam Transaction (beda dari export DWG/NWC yang read-only).
                 // Tanpa ini -> ModificationOutsideTransactionException
                 // ("Modifying is forbidden because the document has no open transaction").
+                // File IFC sudah ditulis ke disk saat doc.Export() dipanggil.
+                // Perubahan yang perlu Transaction cuma penulisan-balik IfcGUID ke
+                // elemen; kita RollBack supaya model user TIDAK ikut termodifikasi
+                // (tidak ada "unsaved changes") sekaligus melewati regen commit yang
+                // lambat pada model besar.
                 bool ok;
                 using (var tx = new Transaction(doc, "Revit Web Viewer — Export IFC"))
                 {
                     tx.Start();
                     ok = doc.Export(workDir, "model", opt);
-                    tx.Commit();
+                    tx.RollBack();
                 }
                 if (!ok || !File.Exists(ifcPath))
                     throw new Exception("Export IFC gagal dari view aktif.");
 
-                // 2..6) IfcConvert + upload + DB. Jalankan di Task.Run supaya
-                // panggilan HTTP async tidak deadlock dengan context UI Revit.
-                string resultMsg = Task.Run(() => DoPushAsync(cfg, ifcPath, glbPath, pushedBy))
-                    .GetAwaiter().GetResult();
+                // 2..6) IfcConvert + upload + DB di thread background, dengan dialog
+                // progress. Revit tetap responsif (tidak "Not Responding") selama
+                // upload file besar. Langkah ini tidak menyentuh Revit API.
+                using (var progress = new ProgressDialog(
+                    "Convert & upload model ke server…\nProses ini bisa beberapa saat, jangan tutup Revit.",
+                    () => DoPushAsync(cfg, ifcPath, glbPath, pushedBy)))
+                {
+                    progress.ShowDialog();
+                    if (progress.Error != null) throw progress.Error;
 
-                TaskDialog.Show("Revit Web Viewer — Sukses (build " + AppInfo.BuildTag + ")", resultMsg);
-                return Result.Succeeded;
+                    TaskDialog.Show("Revit Web Viewer — Sukses (build " + AppInfo.BuildTag + ")",
+                        progress.Result);
+                    return Result.Succeeded;
+                }
             }
             catch (Exception ex)
             {

@@ -12,6 +12,10 @@ export const locales = {
     },
     sheets: {
       title: 'Sheet',
+      show: 'Sheet',
+      hide: 'Tutup',
+      empty: 'Tidak ada sheet',
+      selectHint: 'Pilih sheet untuk melihat preview',
     },
     access: {
       enterPin: 'Masukkan PIN akses',
@@ -52,6 +56,9 @@ export const locales = {
       needPassword: 'Set env VIEWER_ADMIN_PASSWORD di Vercel dulu untuk memakai fitur upload, lalu redeploy.',
       deleteFile: 'Hapus',
       confirmDeleteFile: 'Hapus file model ini dari daftar?',
+      sheetList: 'Sheet',
+      sheetHint: 'Centang sheet yang mau ditampilkan ke client.',
+      sheetEmpty: 'Belum ada sheet. Sync sheet dari add-in Revit dulu.',
     },
     ui: { lang: 'EN', theme: 'Tema', language: 'Bahasa' },
   },
@@ -68,6 +75,10 @@ export const locales = {
     },
     sheets: {
       title: 'Sheets',
+      show: 'Sheets',
+      hide: 'Close',
+      empty: 'No sheets',
+      selectHint: 'Select a sheet to see the preview',
     },
     access: {
       enterPin: 'Enter access PIN',
@@ -108,6 +119,9 @@ export const locales = {
       needPassword: 'Set env VIEWER_ADMIN_PASSWORD in Vercel first to use upload, then redeploy.',
       deleteFile: 'Delete',
       confirmDeleteFile: 'Remove this model file from the list?',
+      sheetList: 'Sheets',
+      sheetHint: 'Check the sheets you want to show to the client.',
+      sheetEmpty: 'No sheets yet. Sync sheets from the Revit add-in first.',
     },
     ui: { lang: 'ID', theme: 'Theme', language: 'Language' },
   },

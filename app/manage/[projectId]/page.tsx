@@ -5,6 +5,7 @@ import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import AdminLogin from '@/components/AdminLogin';
 import UploadModel from '@/components/UploadModel';
 import DeleteModelFileButton from '@/components/DeleteModelFileButton';
+import SheetVisibilityList, { type ManageSheet } from '@/components/SheetVisibilityList';
 import UiToggles from '@/components/UiToggles';
 
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,13 @@ interface ModelFileRow {
   drive_file_id: string;
   label: string | null;
   created_at: string | null;
+}
+
+interface SheetRow {
+  id: string;
+  sheet_number: string;
+  sheet_name: string | null;
+  is_visible: boolean | null;
 }
 
 export default async function ManagePage({
@@ -51,7 +59,19 @@ export default async function ManagePage({
     .eq('project_id', projectId)
     .order('created_at', { ascending: false });
 
+  const { data: sheetRows } = await supabase
+    .from('sheets')
+    .select('id, sheet_number, sheet_name, is_visible')
+    .eq('project_id', projectId)
+    .order('sort_order', { ascending: true });
+
   const list = (files ?? []) as ModelFileRow[];
+  const sheets: ManageSheet[] = ((sheetRows ?? []) as SheetRow[]).map((s) => ({
+    id: s.id,
+    title: `${s.sheet_number}${s.sheet_name ? ' — ' + s.sheet_name : ''}`,
+    // Kolom baru: baris lama (null) dianggap tampil.
+    isVisible: s.is_visible !== false,
+  }));
 
   return (
     <main className="mx-auto max-w-2xl p-6">
@@ -101,6 +121,17 @@ export default async function ManagePage({
             </li>
           ))}
         </ul>
+      )}
+
+      <h2 className="mb-2 mt-6 text-sm font-medium opacity-70">
+        {t.manage.sheetList} ({sheets.length})
+      </h2>
+      {sheets.length === 0 ? (
+        <p className="rounded border border-foreground/10 p-4 text-sm opacity-60">
+          {t.manage.sheetEmpty}
+        </p>
+      ) : (
+        <SheetVisibilityList sheets={sheets} hint={t.manage.sheetHint} />
       )}
     </main>
   );

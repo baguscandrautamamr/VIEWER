@@ -16,30 +16,43 @@ export interface SheetItem {
   cameraPreset: string | null;
 }
 
-// Panel presentasi: kiri viewer 3D (+ dropdown model), kanan daftar sheet.
-// Klik sheet -> pindahkan kamera 3D ke preset sheet itu (Fase 3a).
+interface SheetStrings {
+  title: string;
+  show: string;
+  hide: string;
+  empty: string;
+  selectHint: string;
+}
+
+// Panel presentasi: kiri viewer 3D (+ dropdown model), kanan sidebar sheet yang
+// bisa dibuka/tutup. Sidebar berisi preview pane (sheet aktif) + daftar sheet
+// gaya "detail view" (baris ringkas). Klik sheet -> pindah kamera 3D ke preset
+// sheet itu (Fase 3a) sekaligus tampilkan PDF-nya di preview pane.
 export default function PresentClient({
   projectId,
   files,
   fallbackUrl,
   locale = 'id',
   sheets,
-  sheetsTitle,
+  sheetStrings,
 }: {
   projectId: string;
   files: ModelFileOption[];
   fallbackUrl: string | null;
   locale?: Locale;
   sheets: SheetItem[];
-  sheetsTitle: string;
+  sheetStrings: SheetStrings;
 }) {
   const [selected, setSelected] = useState<string | null>(files[0]?.id ?? null);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   // Bump counter tiap klik supaya klik sheet yang sama pun memicu re-apply.
   const [presetTick, setPresetTick] = useState(0);
   const [preset, setPreset] = useState<string | null>(null);
+  // Sidebar default terbuka bila ada sheet.
+  const [sidebarOpen, setSidebarOpen] = useState(sheets.length > 0);
 
   const url = selected ? `/api/model-file/${selected}` : fallbackUrl;
+  const active = sheets.find((s) => s.id === activeSheet) ?? null;
 
   function onSheetClick(s: SheetItem) {
     setActiveSheet(s.id);
@@ -48,8 +61,9 @@ export default function PresentClient({
   }
 
   return (
-    <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[2fr_1fr]">
-      <div className="relative rounded border border-foreground/15">
+    <div className="relative flex flex-1 gap-4 overflow-hidden">
+      {/* Viewer 3D */}
+      <div className="relative min-w-0 flex-1 rounded border border-foreground/15">
         {files.length > 1 && (
           <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2">
             <select
@@ -78,27 +92,74 @@ export default function PresentClient({
             —
           </div>
         )}
+
+        {/* Tombol buka sidebar (muncul saat sidebar tertutup & ada sheet). */}
+        {sheets.length > 0 && !sidebarOpen && (
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="absolute right-3 top-3 z-10 rounded border border-foreground/20 bg-background/80 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:border-foreground/40"
+          >
+            {sheetStrings.show} ({sheets.length})
+          </button>
+        )}
       </div>
 
-      <div className="overflow-y-auto rounded border border-foreground/15 p-3">
-        <h2 className="mb-2 text-sm font-medium opacity-70">{sheetsTitle}</h2>
-        <div className="flex flex-col gap-4">
-          {sheets.map((s) => (
+      {/* Sidebar sheet (collapsible). */}
+      {sheets.length > 0 && (
+        <aside
+          className={`flex shrink-0 flex-col overflow-hidden rounded transition-all duration-300 ${
+            sidebarOpen ? 'w-72 border border-foreground/15 md:w-80' : 'w-0 border-0'
+          }`}
+        >
+          <div className="flex items-center justify-between border-b border-foreground/10 p-3">
+            <h2 className="text-sm font-medium opacity-70">
+              {sheetStrings.title} ({sheets.length})
+            </h2>
             <button
-              key={s.id}
-              onClick={() => onSheetClick(s)}
-              className={`flex flex-col gap-2 rounded border p-2 text-left transition-colors ${
-                activeSheet === s.id
-                  ? 'border-accent'
-                  : 'border-foreground/10 hover:border-foreground/30'
-              }`}
+              onClick={() => setSidebarOpen(false)}
+              className="rounded px-2 py-0.5 text-sm opacity-60 hover:opacity-100"
+              aria-label={sheetStrings.hide}
+              title={sheetStrings.hide}
             >
-              <div className="text-sm font-medium">{s.title}</div>
-              <SheetViewer pdfUrl={`/api/sheet-file/${s.id}`} />
+              ✕
             </button>
-          ))}
-        </div>
-      </div>
+          </div>
+
+          {/* Preview pane: hanya sheet yang sedang dipilih. */}
+          <div className="border-b border-foreground/10 p-3">
+            {active ? (
+              <SheetViewer
+                key={active.id}
+                pdfUrl={`/api/sheet-file/${active.id}`}
+                sheetName={active.title}
+              />
+            ) : (
+              <p className="py-8 text-center text-xs opacity-50">
+                {sheetStrings.selectHint}
+              </p>
+            )}
+          </div>
+
+          {/* Detail view: daftar sheet ringkas & rapi. */}
+          <ul className="flex-1 divide-y divide-foreground/10 overflow-y-auto">
+            {sheets.map((s) => (
+              <li key={s.id}>
+                <button
+                  onClick={() => onSheetClick(s)}
+                  className={`block w-full truncate px-3 py-2 text-left text-sm transition-colors ${
+                    activeSheet === s.id
+                      ? 'bg-accent/15 font-medium'
+                      : 'hover:bg-foreground/5'
+                  }`}
+                  title={s.title}
+                >
+                  {s.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
     </div>
   );
 }

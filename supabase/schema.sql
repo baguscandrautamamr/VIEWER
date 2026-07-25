@@ -39,7 +39,10 @@ create table sheets (
   -- Preset kamera 3D untuk "klik sheet -> pindah sudut": top/bottom/front/back/
   -- left/right/iso. Dihitung add-in dari orientasi view di sheet.
   camera_preset text,
-  sort_order int default 0
+  sort_order int default 0,
+  -- Kontrol tampil/sembunyi sheet ke client (dicentang admin di halaman Kelola).
+  -- Default true supaya sheet baru langsung tampil.
+  is_visible boolean default true
 );
 
 create table elements (
@@ -127,3 +130,5 @@ alter table sheets alter column pdf_storage_path drop not null;
 alter table sheets add column if not exists pdf_drive_file_id text;
 alter table sheets add column if not exists camera_preset text;
 alter table sheets add column if not exists sort_order int default 0;
+-- Kontrol tampil/sembunyi sheet ke client (halaman Kelola). Aman berulang.
+alter table sheets add column if not exists is_visible boolean default true;

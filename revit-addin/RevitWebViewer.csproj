@@ -5,9 +5,9 @@
       net48            -> Revit 2023 (.NET Framework 4.8)
       net8.0-windows   -> Revit 2025 (.NET 8)
 
-    Build di Visual Studio 2022 (atau `dotnet build -c Release`). Tiap target
-    otomatis mereferensi RevitAPI dari folder instalasi versi yang cocok.
-    Kalau path instalasi Revit-mu beda, ubah Revit2023Dir / Revit2025Dir.
+    Revit API diambil dari NuGet (Nice3point) — TIDAK perlu Revit terinstall
+    untuk build. Jadi bisa di-build di GitHub Actions (lihat
+    .github/workflows/build-addin.yml) atau lokal via `dotnet build -c Release`.
   -->
 
   <PropertyGroup>
@@ -19,39 +19,23 @@
     <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
     <AssemblyName>RevitWebViewer</AssemblyName>
     <RootNamespace>RevitWebViewer</RootNamespace>
-
-    <!-- Ubah kalau Revit terinstall di lokasi lain -->
-    <Revit2023Dir>C:\Program Files\Autodesk\Revit 2023</Revit2023Dir>
-    <Revit2025Dir>C:\Program Files\Autodesk\Revit 2025</Revit2025Dir>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
-  <!-- Revit 2023 -> net48. Private=false: DLL Revit API JANGAN ikut di-copy. -->
+  <!-- Revit 2023 -> net48. Revit API dari NuGet, tidak ikut di-copy ke output. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
-    <Reference Include="RevitAPI">
-      <HintPath>$(Revit2023Dir)\RevitAPI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="RevitAPIUI">
-      <HintPath>$(Revit2023Dir)\RevitAPIUI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2023.*" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2023.*" />
     <Reference Include="System.Net.Http" />
   </ItemGroup>
 
   <!-- Revit 2025 -> net8.0-windows -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
-    <Reference Include="RevitAPI">
-      <HintPath>$(Revit2025Dir)\RevitAPI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="RevitAPIUI">
-      <HintPath>$(Revit2025Dir)\RevitAPIUI.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2025.*" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2025.*" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,41 @@
+name: Build Revit Add-in
+
+# Build add-in Revit (2023 + 2025) di runner Windows, tanpa perlu Revit atau
+# Visual Studio lokal. Hasilnya bisa di-download dari tab Actions (Artifacts).
+on:
+  workflow_dispatch: # bisa dijalankan manual dari tab Actions
+  push:
+    paths:
+      - 'revit-addin/**'
+      - '.github/workflows/build-addin.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build (net48 -> Revit 2023, net8.0-windows -> Revit 2025)
+        run: dotnet build revit-addin/RevitWebViewer.csproj -c Release
+
+      - name: Rapikan hasil build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out/2023, out/2025 | Out-Null
+          Copy-Item revit-addin/bin/Release/net48/*          out/2023/ -Recurse -Force
+          Copy-Item revit-addin/bin/Release/net8.0-windows/* out/2025/ -Recurse -Force
+          Copy-Item revit-addin/revit-web-viewer.config.example.json out/2023/
+          Copy-Item revit-addin/revit-web-viewer.config.example.json out/2025/
+          Copy-Item revit-addin/RevitWebViewer.addin out/
+          Copy-Item revit-addin/README.md out/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RevitWebViewer-addin
+          path: out/**

@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase';
-import ModelViewer from '@/components/ModelViewer';
+import PresentClient, { type ModelFileOption } from '@/components/PresentClient';
 import SheetViewer from '@/components/SheetViewer';
 import VersionBadge from '@/components/VersionBadge';
 import DownloadRvtButton from '@/components/DownloadRvtButton';
@@ -14,9 +14,6 @@ interface PresentPageProps {
   searchParams: Promise<{ t?: string }>; // t = client access token (spec bagian 11)
 }
 
-// Fase 1: akses client pakai token di query string (?t=xxxx) — dipilih karena
-// paling sederhana & sudah diasumsikan skeleton (admin page generate link ?t=).
-// Kalau nanti mau ganti ke PIN input terpisah, ubah gate di sini + app/api/auth.
 export default async function PresentPage({ params, searchParams }: PresentPageProps) {
   const { projectId } = await params;
   const { t: token } = await searchParams;
@@ -38,13 +35,18 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
           <p className="text-sm opacity-80">
             Link presentasi tidak valid atau token akses salah.
           </p>
-          <p className="mt-2 text-xs opacity-50">
-            Minta ulang link akses ke tim project.
-          </p>
+          <p className="mt-2 text-xs opacity-50">Minta ulang link akses ke tim project.</p>
         </div>
       </main>
     );
   }
+
+  // Pustaka model manual (Fase 1) + versi terbaru (fallback / badge / RVT).
+  const { data: modelFiles } = await supabase
+    .from('model_files')
+    .select('id, label, drive_file_id, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
 
   const { data: latestVersion } = await supabase
     .from('model_versions')
@@ -52,19 +54,24 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
     .eq('project_id', projectId)
     .order('version_number', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   const { data: sheets } = await supabase
     .from('sheets')
     .select('*')
     .eq('project_id', projectId);
 
-  if (!latestVersion) {
+  const files: ModelFileOption[] = (modelFiles ?? []).map((f) => ({
+    id: f.id as string,
+    label: (f.label as string) || 'Model',
+  }));
+  const fallbackUrl = latestVersion ? `/api/model/${latestVersion.id}` : null;
+
+  const hasAnything = files.length > 0 || fallbackUrl || (sheets && sheets.length > 0);
+  if (!hasAnything) {
     return (
       <main className="flex h-screen items-center justify-center p-6">
-        <div className="text-sm opacity-70">
-          Belum ada versi model untuk project ini.
-        </div>
+        <div className="text-sm opacity-70">Belum ada model / sheet untuk project ini.</div>
       </main>
     );
   }
@@ -74,22 +81,21 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium">{project.name}</span>
-          <VersionBadge
-            versionNumber={latestVersion.version_number}
-            pushedAt={latestVersion.pushed_at}
-          />
+          {latestVersion && (
+            <VersionBadge
+              versionNumber={latestVersion.version_number}
+              pushedAt={latestVersion.pushed_at}
+            />
+          )}
         </div>
-        {latestVersion.rvt_drive_file_id && (
+        {latestVersion?.rvt_drive_file_id && (
           <DownloadRvtButton driveFileId={latestVersion.rvt_drive_file_id} />
         )}
       </div>
 
       <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[2fr_1fr]">
         <div className="rounded border">
-          <ModelViewer
-            projectId={projectId}
-            initialGlbUrl={`/api/model/${latestVersion.id}`}
-          />
+          <PresentClient projectId={projectId} files={files} fallbackUrl={fallbackUrl} />
         </div>
 
         <div className="overflow-y-auto rounded border p-3">

@@ -46,11 +46,23 @@ create table elements (
   unique (project_id, global_id)
 );
 
+-- Pustaka file GLB per project (Fase 1 alur manual): user convert IFC->GLB
+-- sendiri lalu upload lewat website. Tiap file jadi 1 baris di sini; viewer
+-- menampilkannya sebagai dropdown "pilih model".
+create table model_files (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade,
+  drive_file_id text not null,
+  label text,
+  created_at timestamptz default now()
+);
+
 -- Row Level Security.
 alter table projects enable row level security;
 alter table model_versions enable row level security;
 alter table sheets enable row level security;
 alter table elements enable row level security;
+alter table model_files enable row level security;
 
 -- Kebijakan Fase 1 (token via query string, lihat bagian 11 spec):
 --
@@ -75,6 +87,9 @@ create policy "anon read sheets"
 create policy "anon read elements"
   on elements for select to anon using (true);
 
+create policy "anon read model_files"
+  on model_files for select to anon using (true);
+
 -- Supabase Realtime hanya mem-broadcast perubahan tabel yang masuk ke
 -- publication `supabase_realtime`. Tanpa baris ini, INSERT ke model_versions
 -- TIDAK akan sampai ke client yang subscribe di lib/realtime.ts.
@@ -86,3 +101,16 @@ alter publication supabase_realtime add table model_versions;
 -- ---------------------------------------------------------------------------
 alter table model_versions add column if not exists glb_drive_file_id text;
 alter table model_versions alter column glb_storage_path drop not null;
+
+-- Tabel pustaka model manual (Fase 1). Aman dijalankan berulang.
+create table if not exists model_files (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade,
+  drive_file_id text not null,
+  label text,
+  created_at timestamptz default now()
+);
+alter table model_files enable row level security;
+do $$ begin
+  create policy "anon read model_files" on model_files for select to anon using (true);
+exception when duplicate_object then null; end $$;

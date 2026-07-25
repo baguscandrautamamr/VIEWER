@@ -70,6 +70,12 @@ export default async function HomePage() {
                 <div className="truncate text-[11px] opacity-40">{p.id}</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
+                <Link
+                  href={`/manage/${p.id}`}
+                  className="rounded border border-white/20 px-2 py-1 text-xs opacity-80 hover:opacity-100"
+                >
+                  Kelola
+                </Link>
                 <CopyLinkButton path={path} />
                 <Link
                   href={path}

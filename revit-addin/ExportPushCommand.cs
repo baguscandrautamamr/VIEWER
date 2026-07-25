@@ -19,9 +19,8 @@ namespace RevitWebViewer
             if (uidoc == null) { TaskDialog.Show("Revit Web Viewer", "Buka project dulu."); return Result.Cancelled; }
             Document doc = uidoc.Document;
 
-            Config cfg;
-            try { cfg = Config.Load(); }
-            catch (Exception ex) { TaskDialog.Show("Config Revit Web Viewer", ex.Message); return Result.Failed; }
+            Config cfg = LoadConfigOrPrompt();
+            if (cfg == null) return Result.Cancelled; // user batal isi config
 
             // Wajib 3D view (yang sudah di-isolate ke electrical).
             View view = doc.ActiveView;
@@ -65,6 +64,38 @@ namespace RevitWebViewer
             finally
             {
                 try { Directory.Delete(workDir, true); } catch { /* biarin */ }
+            }
+        }
+
+        // Ambil config. Kalau belum ada / tidak valid, tawarkan buka form
+        // Pengaturan langsung (biar tidak dead-end seperti error lama). Return
+        // null artinya user membatalkan -> command berhenti tanpa error.
+        private static Config LoadConfigOrPrompt()
+        {
+            try { return Config.Load(); }
+            catch (Exception ex)
+            {
+                var td = new TaskDialog("Revit Web Viewer — Konfigurasi")
+                {
+                    MainInstruction = "Konfigurasi belum lengkap.",
+                    MainContent = ex.Message,
+                    AllowCancellation = true,
+                    CommonButtons = TaskDialogCommonButtons.Cancel
+                };
+                td.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Buka Pengaturan sekarang");
+
+                if (td.Show() != TaskDialogResult.CommandLink1)
+                    return null;
+
+                if (!SettingsForm.Edit(Config.ReadRaw()))
+                    return null; // user batal di form
+
+                try { return Config.Load(); }
+                catch (Exception ex2)
+                {
+                    TaskDialog.Show("Revit Web Viewer — Konfigurasi", ex2.Message);
+                    return null;
+                }
             }
         }
 

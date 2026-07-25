@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { getSupabase } from '@/lib/supabase';
 import { locales, type Locale } from '@/lib/i18n';
+import MarkupOverlay from './MarkupOverlay';
 
 interface ModelViewerProps {
   projectId: string;
@@ -72,6 +73,7 @@ export default function ModelViewer({
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   // Section box: on/off + posisi tiap sisi (0..1 fraksi dari setengah ukuran
   // model; 1 = di tepi/tidak memotong, 0 = di tengah).
+  const [markupOn, setMarkupOn] = useState(false);
   const [sectionOn, setSectionOn] = useState(false);
   const [clip, setClip] = useState({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
 
@@ -130,7 +132,13 @@ export default function ModelViewer({
     camera.position.set(10, 10, 10);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // preserveDrawingBuffer: wajib supaya isi canvas 3D masih bisa dibaca saat
+    // export PNG markup (tanpa ini hasilnya kosong karena buffer sudah di-clear).
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
@@ -357,6 +365,12 @@ export default function ModelViewer({
     setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
   }
 
+  // Bekukan orbit/zoom selama mode coret, supaya gambar tetap pas dengan
+  // tampilan 3D di layar (coretan hidup di screen space, tidak ikut berputar).
+  useEffect(() => {
+    if (controlsRef.current) controlsRef.current.enabled = !markupOn;
+  }, [markupOn]);
+
   // Model IFC dari Revit sering pakai koordinat dunia yang jauh dari origin
   // (survey/shared coords) dan ukurannya bervariasi. Tanpa ini, kamera default
   // (10,10,10) nunjuk ke (0,0,0) dan modelnya "di luar layar" -> viewport hitam.
@@ -475,12 +489,12 @@ export default function ModelViewer({
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
 
-      <div className="pointer-events-none absolute left-3 top-3 text-xs opacity-70">
-        {t.isolateHint}
+      <div className="pointer-events-none absolute left-3 top-3 z-30 text-xs opacity-70">
+        {markupOn ? t.markupFrozen : t.isolateHint}
       </div>
 
       {/* Kontrol mode isolate + reset */}
-      <div className="absolute right-3 top-3 flex items-center gap-2">
+      <div className="absolute right-3 top-3 z-30 flex max-w-[75%] flex-wrap items-center justify-end gap-2">
         <button
           onClick={toggleIsolate}
           className={`${btnBase} border border-white/20 backdrop-blur ${
@@ -523,6 +537,14 @@ export default function ModelViewer({
           }`}
         >
           {t.section}
+        </button>
+        <button
+          onClick={() => setMarkupOn((v) => !v)}
+          className={`${btnBase} border border-white/20 backdrop-blur ${
+            markupOn ? 'bg-accent text-black' : 'bg-black/50 text-white'
+          }`}
+        >
+          {t.markup}
         </button>
         <button
           onClick={() => {
@@ -604,6 +626,13 @@ export default function ModelViewer({
           {liveUpdateMessage}
         </div>
       )}
+
+      {/* Layer coret-coret (Metode A: canvas overlay screen space). */}
+      <MarkupOverlay
+        active={markupOn}
+        strings={locales[locale].markup}
+        getViewerCanvas={() => rendererRef.current?.domElement ?? null}
+      />
     </div>
   );
 }

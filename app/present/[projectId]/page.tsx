@@ -1,7 +1,6 @@
 import { createServiceClient } from '@/lib/supabase';
 import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
-import PresentClient, { type ModelFileOption } from '@/components/PresentClient';
-import SheetViewer from '@/components/SheetViewer';
+import PresentClient, { type ModelFileOption, type SheetItem } from '@/components/PresentClient';
 import VersionBadge from '@/components/VersionBadge';
 import DownloadRvtButton from '@/components/DownloadRvtButton';
 import UiToggles from '@/components/UiToggles';
@@ -57,18 +56,24 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
     .limit(1)
     .maybeSingle();
 
-  const { data: sheets } = await supabase
+  const { data: sheetRows } = await supabase
     .from('sheets')
-    .select('*')
-    .eq('project_id', projectId);
+    .select('id, sheet_number, sheet_name, camera_preset, sort_order')
+    .eq('project_id', projectId)
+    .order('sort_order', { ascending: true });
 
   const files: ModelFileOption[] = (modelFiles ?? []).map((f) => ({
     id: f.id as string,
     label: (f.label as string) || 'Model',
   }));
+  const sheets: SheetItem[] = (sheetRows ?? []).map((s) => ({
+    id: s.id as string,
+    title: `${s.sheet_number}${s.sheet_name ? ' — ' + s.sheet_name : ''}`,
+    cameraPreset: (s.camera_preset as string) ?? null,
+  }));
   const fallbackUrl = latestVersion ? `/api/model/${latestVersion.id}` : null;
 
-  const hasAnything = files.length > 0 || fallbackUrl || (sheets && sheets.length > 0);
+  const hasAnything = files.length > 0 || fallbackUrl || sheets.length > 0;
   if (!hasAnything) {
     return (
       <main className="flex h-screen items-center justify-center p-6">
@@ -97,29 +102,14 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
         </div>
       </div>
 
-      <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[2fr_1fr]">
-        <div className="rounded border border-foreground/15">
-          <PresentClient
-            projectId={projectId}
-            files={files}
-            fallbackUrl={fallbackUrl}
-            locale={locale}
-          />
-        </div>
-
-        <div className="overflow-y-auto rounded border border-foreground/15 p-3">
-          <h2 className="mb-2 text-sm font-medium opacity-70">{strings.sheets.title}</h2>
-          <div className="flex flex-col gap-4">
-            {sheets?.map((sheet) => (
-              <SheetViewer
-                key={sheet.id}
-                pdfUrl={sheet.pdf_storage_path}
-                sheetName={`${sheet.sheet_number} — ${sheet.sheet_name ?? ''}`}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
+      <PresentClient
+        projectId={projectId}
+        files={files}
+        fallbackUrl={fallbackUrl}
+        locale={locale}
+        sheets={sheets}
+        sheetsTitle={strings.sheets.title}
+      />
     </main>
   );
 }

@@ -103,6 +103,32 @@ namespace RevitWebViewer
             }
         }
 
+        // Hapus semua sheet project ini (dipanggil sebelum sync ulang biar tidak dobel).
+        public async Task DeleteSheetsAsync()
+        {
+            string url = _cfg.SupabaseUrl + "/rest/v1/sheets?project_id=eq." + _cfg.ProjectId;
+            var req = new HttpRequestMessage(HttpMethod.Delete, url);
+            req.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+            var res = await _http.SendAsync(req);
+            await EnsureOk(res, "Hapus sheet lama");
+        }
+
+        // Insert 1 sheet (PDF di Drive + preset kamera).
+        public async Task InsertSheetAsync(string number, string name, string pdfDriveFileId, string preset, int sortOrder)
+        {
+            var payload = new JObject
+            {
+                ["project_id"] = _cfg.ProjectId,
+                ["sheet_number"] = number,
+                ["sheet_name"] = name != null ? new JValue(name) : JValue.CreateNull(),
+                ["pdf_drive_file_id"] = pdfDriveFileId,
+                ["camera_preset"] = preset,
+                ["sort_order"] = sortOrder
+            };
+            var res = await PostJsonAsync(_cfg.SupabaseUrl + "/rest/v1/sheets", payload.ToString(), "return=minimal");
+            await EnsureOk(res, "Insert sheet");
+        }
+
         public async Task<string> GetTokenAsync()
         {
             try

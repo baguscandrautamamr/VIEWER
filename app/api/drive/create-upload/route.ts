@@ -21,9 +21,11 @@ export async function POST(req: NextRequest) {
   }
 
   let fileName = '';
+  let mimeType = 'model/gltf-binary';
   try {
     const body = await req.json();
     fileName = typeof body?.fileName === 'string' ? body.fileName : '';
+    if (typeof body?.mimeType === 'string' && body.mimeType) mimeType = body.mimeType;
   } catch {
     /* ignore */
   }
@@ -32,7 +34,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const uploadUri = await createResumableUpload(fileName);
+    const uploadUri = await createResumableUpload(fileName, mimeType);
     return NextResponse.json({ uploadUri });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Gagal bikin upload session';

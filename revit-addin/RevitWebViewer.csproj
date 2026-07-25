@@ -19,9 +19,11 @@
     <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
     <AssemblyName>RevitWebViewer</AssemblyName>
     <RootNamespace>RevitWebViewer</RootNamespace>
-    <!-- Form Pengaturan (SettingsForm) pakai WinForms. Untuk .NET 8 aktifkan
-         lewat properti ini; untuk net48 cukup Reference framework di bawah. -->
+    <!-- Form Pengaturan (SettingsForm) pakai WinForms; icon ribbon pakai WPF
+         (ImageSource). Untuk .NET 8 aktifkan lewat properti ini; untuk net48
+         cukup Reference framework di bawah. -->
     <UseWindowsForms Condition="'$(TargetFramework)' == 'net8.0-windows'">true</UseWindowsForms>
+    <UseWPF Condition="'$(TargetFramework)' == 'net8.0-windows'">true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,6 +38,9 @@
     <!-- WinForms untuk net48: assembly framework, resolved dari targeting pack. -->
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Drawing" />
+    <!-- WPF untuk net48 (icon ribbon ImageSource). -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="WindowsBase" />
   </ItemGroup>
 
   <!-- Revit 2025 -> net8.0-windows -->

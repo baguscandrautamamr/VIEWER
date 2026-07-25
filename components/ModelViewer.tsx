@@ -12,6 +12,8 @@ interface ModelViewerProps {
   projectId: string;
   initialGlbUrl: string;
   locale?: Locale;
+  // Preset kamera dari klik sheet: top/bottom/front/back/left/right/iso.
+  cameraPreset?: string | null;
   onElementSelect?: (globalId: string | null) => void;
 }
 
@@ -24,6 +26,7 @@ export default function ModelViewer({
   projectId,
   initialGlbUrl,
   locale = 'id',
+  cameraPreset = null,
   onElementSelect,
 }: ModelViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -31,6 +34,8 @@ export default function ModelViewer({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const modelRootRef = useRef<THREE.Object3D | null>(null);
+  // Ukuran bounding box model (buat menghitung jarak kamera preset).
+  const modelSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const meshesByGlobalId = useRef<Map<string, THREE.Mesh>>(new Map());
   const originalMaterials = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
   // GlobalId -> category, diambil dari tabel `elements`. Dipakai untuk
@@ -171,6 +176,37 @@ export default function ModelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, initialGlbUrl]);
 
+  // Klik sheet -> pindahkan kamera ke sudut preset. Model sudah di-center ke
+  // origin (lihat frameCameraToObject) & scene Y-up, jadi target = (0,0,0).
+  function applyCameraPreset(preset: string) {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const key = preset.split('#')[0]; // buang suffix tick ("top#3" -> "top")
+    const size = modelSizeRef.current;
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const d = maxDim * 1.9;
+    const table: Record<string, [number, number, number]> = {
+      top: [0.001, d, 0.001],
+      bottom: [0.001, -d, 0.001],
+      front: [0, d * 0.15, d],
+      back: [0, d * 0.15, -d],
+      left: [-d, d * 0.15, 0],
+      right: [d, d * 0.15, 0],
+      iso: [d, d * 0.8, d],
+    };
+    const p = table[key] ?? table.iso;
+    camera.position.set(p[0], p[1], p[2]);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+
+  // Terapkan preset kamera saat prop cameraPreset berubah (klik sheet).
+  useEffect(() => {
+    if (cameraPreset) applyCameraPreset(cameraPreset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraPreset]);
+
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     const loader = new GLTFLoader();
     loader.load(
@@ -226,6 +262,7 @@ export default function ModelViewer({
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     object.position.sub(center); // center model -> (0,0,0)
+    modelSizeRef.current = size.clone();
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const dist = maxDim * 1.8;

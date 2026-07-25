@@ -12,7 +12,8 @@ namespace RevitWebViewer
     public static class DriveUploader
     {
         public static async Task<string> UploadAsync(
-            string presentBaseUrl, string serviceKey, string fileName, byte[] glb)
+            string presentBaseUrl, string serviceKey, string fileName, byte[] bytes,
+            string mimeType = "model/gltf-binary")
         {
             if (string.IsNullOrWhiteSpace(presentBaseUrl))
                 throw new Exception(
@@ -27,7 +28,7 @@ namespace RevitWebViewer
                 http.Timeout = TimeSpan.FromMinutes(15);
 
                 // 1) Minta resumable upload session dari app (auth: service key).
-                var reqBody = new JObject { ["fileName"] = fileName }.ToString();
+                var reqBody = new JObject { ["fileName"] = fileName, ["mimeType"] = mimeType }.ToString();
                 var createReq = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/api/drive/create-upload")
                 {
                     Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
@@ -45,9 +46,9 @@ namespace RevitWebViewer
 
                 // 2) PUT byte GLB langsung ke Google (URI sudah pre-authorized,
                 //    JANGAN kirim header auth Supabase ke sini).
-                using (var putContent = new ByteArrayContent(glb))
+                using (var putContent = new ByteArrayContent(bytes))
                 {
-                    putContent.Headers.TryAddWithoutValidation("Content-Type", "model/gltf-binary");
+                    putContent.Headers.TryAddWithoutValidation("Content-Type", mimeType);
                     var putRes = await http.PutAsync(uploadUri, putContent);
                     string putTxt = await putRes.Content.ReadAsStringAsync();
                     if (!putRes.IsSuccessStatusCode)

@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Windows.Media;
 using Autodesk.Revit.UI;
 
 namespace RevitWebViewer
@@ -16,6 +17,11 @@ namespace RevitWebViewer
             RibbonPanel panel = app.CreateRibbonPanel(tab, "Sync");
             string asmPath = Assembly.GetExecutingAssembly().Location;
 
+            // Icon dibuat sekali; kalau gagal (mis. konteks tanpa WPF) tombol
+            // tetap muncul tanpa gambar.
+            ImageSource icon = null;
+            try { icon = RibbonIcon.Build(); } catch { /* tanpa icon */ }
+
             var btn = new PushButtonData(
                 "RwvExportPush",
                 "Export &\nPush",
@@ -25,22 +31,36 @@ namespace RevitWebViewer
             btn.LongDescription =
                 "Isolate dulu ke disiplin electrical di 3D view, lalu klik tombol ini. " +
                 "Add-in export IFC dari view aktif, convert ke GLB (IfcConvert), upload " +
-                "ke Supabase, deteksi kategori, dan tambah versi baru.";
-
+                "ke Google Drive, dan tambah versi baru.";
+            if (icon != null) btn.LargeImage = icon;
             panel.AddItem(btn);
+
+            var sheetsBtn = new PushButtonData(
+                "RwvSyncSheets",
+                "Sync\nSheets",
+                asmPath,
+                "RevitWebViewer.SyncSheetsCommand");
+            sheetsBtn.ToolTip = "Export semua sheet jadi PDF dan sync ke website (ringan).";
+            sheetsBtn.LongDescription =
+                "Meng-export tiap sheet jadi PDF, upload ke Google Drive, dan mencatatnya " +
+                "di website. Klik sheet di viewer akan memindahkan sudut kamera 3D sesuai " +
+                "orientasi sheet.";
+            if (icon != null) sheetsBtn.LargeImage = icon;
+            panel.AddItem(sheetsBtn);
 
             var settingsBtn = new PushButtonData(
                 "RwvSettings",
                 "Penga-\nturan",
                 asmPath,
                 "RevitWebViewer.SettingsCommand");
-            settingsBtn.ToolTip = "Isi/ubah koneksi Supabase, Project ID, dan path IfcConvert.";
+            settingsBtn.ToolTip = "Isi/ubah koneksi Supabase, Project ID, path IfcConvert, dan Present URL.";
             settingsBtn.LongDescription =
                 "Buka form untuk mengisi konfigurasi add-in (Supabase URL, Service Role " +
                 "Key, Project ID, Bucket, path IfcConvert.exe, Present Base URL). " +
                 "Tersimpan otomatis, tidak perlu edit file JSON manual.";
-
+            if (icon != null) settingsBtn.LargeImage = icon;
             panel.AddItem(settingsBtn);
+
             return Result.Succeeded;
         }
 

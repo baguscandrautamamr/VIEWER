@@ -80,10 +80,12 @@ Salin `RevitWebViewer.addin` ke folder Addins tiap versi, lalu **edit path
 
 ## 5. Jalankan
 1. **Restart total** Revit (bukan cuma tutup file).
-2. Muncul tab **Revit Web Viewer** → tombol **Export & Push** dan **Pengaturan**.
+2. Muncul tab **Revit Web Viewer** → tombol **Export & Push**, **Sync Sheets**, **Pengaturan**.
 3. Klik **Pengaturan** dulu, isi form, **Simpan** (lihat langkah 3 di atas).
-4. Buka **3D view yang sudah di-isolate ke electrical** → klik **Export & Push**.
-5. Muncul dialog "Sukses — Versi vN". Viewer client yang lagi kebuka auto-update.
+4. Buka **3D view yang sudah di-isolate ke electrical** → klik **Export & Push** (model 3D).
+5. Klik **Sync Sheets** untuk push semua PDF sheet ke website (ringan). Di viewer,
+   klik sheet → sudut kamera 3D otomatis pindah sesuai orientasi sheet.
+6. Muncul dialog "Sukses". Viewer client yang lagi kebuka auto-update.
 
 ---
 

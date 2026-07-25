@@ -32,7 +32,14 @@ create table sheets (
   version_id uuid references model_versions(id) on delete cascade,
   sheet_number text not null,
   sheet_name text,
-  pdf_storage_path text not null
+  -- PDF sheet bisa di Supabase (pdf_storage_path, cara lama) atau Google Drive
+  -- (pdf_drive_file_id, disajikan via /api/sheet-file/[id]).
+  pdf_storage_path text,
+  pdf_drive_file_id text,
+  -- Preset kamera 3D untuk "klik sheet -> pindah sudut": top/bottom/front/back/
+  -- left/right/iso. Dihitung add-in dari orientasi view di sheet.
+  camera_preset text,
+  sort_order int default 0
 );
 
 create table elements (
@@ -114,3 +121,9 @@ alter table model_files enable row level security;
 do $$ begin
   create policy "anon read model_files" on model_files for select to anon using (true);
 exception when duplicate_object then null; end $$;
+
+-- Kolom baru untuk sheets (Fase 2 & 3a). Aman dijalankan berulang.
+alter table sheets alter column pdf_storage_path drop not null;
+alter table sheets add column if not exists pdf_drive_file_id text;
+alter table sheets add column if not exists camera_preset text;
+alter table sheets add column if not exists sort_order int default 0;

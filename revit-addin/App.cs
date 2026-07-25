@@ -28,6 +28,19 @@ namespace RevitWebViewer
                 "ke Supabase, deteksi kategori, dan tambah versi baru.";
 
             panel.AddItem(btn);
+
+            var settingsBtn = new PushButtonData(
+                "RwvSettings",
+                "Penga-\nturan",
+                asmPath,
+                "RevitWebViewer.SettingsCommand");
+            settingsBtn.ToolTip = "Isi/ubah koneksi Supabase, Project ID, dan path IfcConvert.";
+            settingsBtn.LongDescription =
+                "Buka form untuk mengisi konfigurasi add-in (Supabase URL, Service Role " +
+                "Key, Project ID, Bucket, path IfcConvert.exe, Present Base URL). " +
+                "Tersimpan otomatis, tidak perlu edit file JSON manual.";
+
+            panel.AddItem(settingsBtn);
             return Result.Succeeded;
         }
 

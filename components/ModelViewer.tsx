@@ -56,8 +56,15 @@ export default function ModelViewer({
   // Mode dibaca dari ref di dalam handler klik (handler dipasang sekali saat
   // mount, jadi tidak lihat perubahan state biasa). State dipakai untuk UI.
   const modeRef = useRef<IsolateMode>('object');
+  // Isolate bisa dimatikan: klik tetap menampilkan info elemen, tapi tidak
+  // meredupkan objek lain. Ref dipakai handler klik (alasan sama seperti mode).
+  const isolateOnRef = useRef(true);
+  // Satu material redup dipakai bersama semua mesh — jauh lebih hemat daripada
+  // bikin material baru per mesh tiap klik (model besar bisa puluhan ribu mesh).
+  const dimMaterialRef = useRef<THREE.Material | null>(null);
 
   const [mode, setMode] = useState<IsolateMode>('object');
+  const [isolateOn, setIsolateOn] = useState(true);
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
   // Status load model: buat overlay "Memuat…"/"Gagal" supaya layar tidak blank
@@ -73,6 +80,14 @@ export default function ModelViewer({
   function changeMode(next: IsolateMode) {
     modeRef.current = next;
     setMode(next);
+  }
+
+  // Nyalakan/matikan isolate. Saat dimatikan, kembalikan semua mesh ke normal.
+  function toggleIsolate() {
+    const next = !isolateOnRef.current;
+    isolateOnRef.current = next;
+    setIsolateOn(next);
+    if (!next) resetIsolation();
   }
 
   // Ambil peta kategori tiap elemen dari Supabase (anon, dibatasi RLS).
@@ -136,25 +151,44 @@ export default function ModelViewer({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
+    // Bedakan klik dari drag: OrbitControls tetap memicu event `click` setelah
+    // memutar model, yang bikin isolate berubah tanpa sengaja. Jadi klik cuma
+    // dihitung kalau pointer nyaris tidak bergeser.
+    let downX = 0;
+    let downY = 0;
+    let moved = false;
+    function handlePointerDown(event: PointerEvent) {
+      downX = event.clientX;
+      downY = event.clientY;
+      moved = false;
+    }
+    function handlePointerMove(event: PointerEvent) {
+      if (Math.abs(event.clientX - downX) > 4 || Math.abs(event.clientY - downY) > 4) {
+        moved = true;
+      }
+    }
+
     function handleClick(event: MouseEvent) {
+      if (moved) return; // barusan orbit/pan, bukan klik pilih objek
+
       const rect = container.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(pointer, camera);
-      const intersects = raycaster.intersectObjects(scene.children, true);
+      const root = modelRootRef.current;
+      const intersects = raycaster.intersectObjects(root ? [root] : scene.children, true);
 
       if (intersects.length > 0) {
         const target = intersects[0].object as THREE.Mesh;
-        const gid = (target.userData.globalId as string) ?? null;
+        const gid = (target.userData.globalId as string) || null;
 
-        if (modeRef.current === 'category') {
-          isolateByCategory(target);
-        } else {
-          isolateMesh(target);
+        if (isolateOnRef.current) {
+          if (modeRef.current === 'category') isolateByCategory(target);
+          else isolateMesh(target);
         }
 
-        setSelected(gid ? { globalId: gid, category: categoryByGlobalId.current.get(gid) ?? null } : null);
+        setSelected({ globalId: gid ?? '—', category: categoryOf(target) });
         onElementSelect?.(gid);
       } else {
         resetIsolation();
@@ -162,6 +196,8 @@ export default function ModelViewer({
         onElementSelect?.(null);
       }
     }
+    renderer.domElement.addEventListener('pointerdown', handlePointerDown);
+    renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('click', handleClick);
 
     function animate() {
@@ -192,6 +228,8 @@ export default function ModelViewer({
     });
 
     return () => {
+      renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
+      renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('click', handleClick);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
@@ -348,9 +386,33 @@ export default function ModelViewer({
     controls.update();
   }
 
+  // Iterasi SEMUA mesh model lewat traverse — jangan pakai meshesByGlobalId,
+  // karena Map itu 1 entri per globalId: kalau banyak mesh punya nama sama
+  // (atau nama kosong), mesh-mesh lain hilang dari Map dan tidak pernah
+  // ikut diredupkan — isolate jadi kelihatan "tidak jalan".
+  function forEachMesh(cb: (mesh: THREE.Mesh) => void) {
+    const root = modelRootRef.current;
+    if (!root) return;
+    root.traverse((child) => {
+      if (child instanceof THREE.Mesh) cb(child);
+    });
+  }
+
+  // Kategori sebuah mesh: utamakan data dari tabel `elements` (hasil parse IFC).
+  // Kalau belum ada (mis. model di-upload manual tanpa push script), fallback
+  // ke nama mesh dari IfcConvert yang biasanya "NamaFamily:Tipe:Id".
+  function categoryOf(mesh: THREE.Mesh): string | null {
+    const gid = (mesh.userData.globalId as string) || '';
+    const fromDb = categoryByGlobalId.current.get(gid);
+    if (fromDb) return fromDb;
+    const name = mesh.name || '';
+    if (name.includes(':')) return name.split(':')[0].trim() || null;
+    return null;
+  }
+
   // Mode "Objek": cuma 1 mesh yang diklik yang tetap terang.
   function isolateMesh(target: THREE.Mesh) {
-    meshesByGlobalId.current.forEach((mesh) => {
+    forEachMesh((mesh) => {
       if (mesh === target) restoreMesh(mesh);
       else dimMesh(mesh);
     });
@@ -360,20 +422,19 @@ export default function ModelViewer({
   // tetap terang. Kalau elemen yang diklik belum punya data kategori,
   // fallback ke isolate 1 objek biar tetap ada efeknya.
   function isolateByCategory(target: THREE.Mesh) {
-    const targetCat = categoryByGlobalId.current.get(target.userData.globalId as string) ?? null;
+    const targetCat = categoryOf(target);
     if (!targetCat) {
       isolateMesh(target);
       return;
     }
-    meshesByGlobalId.current.forEach((mesh) => {
-      const cat = categoryByGlobalId.current.get(mesh.userData.globalId as string) ?? null;
-      if (cat === targetCat) restoreMesh(mesh);
+    forEachMesh((mesh) => {
+      if (categoryOf(mesh) === targetCat) restoreMesh(mesh);
       else dimMesh(mesh);
     });
   }
 
   function resetIsolation() {
-    meshesByGlobalId.current.forEach((mesh) => restoreMesh(mesh));
+    forEachMesh((mesh) => restoreMesh(mesh));
   }
 
   function restoreMesh(mesh: THREE.Mesh) {
@@ -382,13 +443,15 @@ export default function ModelViewer({
   }
 
   function dimMesh(mesh: THREE.Mesh) {
-    const dimmedMaterial = new THREE.MeshStandardMaterial({
-      color: 0x888888,
-      transparent: true,
-      opacity: DIMMED_OPACITY,
-      depthWrite: false,
-    });
-    mesh.material = dimmedMaterial;
+    if (!dimMaterialRef.current) {
+      dimMaterialRef.current = new THREE.MeshStandardMaterial({
+        color: 0x888888,
+        transparent: true,
+        opacity: DIMMED_OPACITY,
+        depthWrite: false,
+      });
+    }
+    mesh.material = dimMaterialRef.current;
   }
 
   function flashHighlight(mesh: THREE.Mesh) {
@@ -418,15 +481,30 @@ export default function ModelViewer({
 
       {/* Kontrol mode isolate + reset */}
       <div className="absolute right-3 top-3 flex items-center gap-2">
-        <div className="flex overflow-hidden rounded border border-white/20 bg-black/50 backdrop-blur">
+        <button
+          onClick={toggleIsolate}
+          className={`${btnBase} border border-white/20 backdrop-blur ${
+            isolateOn ? 'bg-accent text-black' : 'bg-black/50 text-white'
+          }`}
+          title={t.isolate}
+        >
+          {t.isolate}
+        </button>
+        <div
+          className={`flex overflow-hidden rounded border border-white/20 bg-black/50 backdrop-blur ${
+            isolateOn ? '' : 'opacity-40'
+          }`}
+        >
           <button
             onClick={() => changeMode('object')}
+            disabled={!isolateOn}
             className={`${btnBase} ${mode === 'object' ? 'bg-accent text-black' : 'text-white'}`}
           >
             {t.modeObject}
           </button>
           <button
             onClick={() => changeMode('category')}
+            disabled={!isolateOn}
             className={`${btnBase} ${mode === 'category' ? 'bg-accent text-black' : 'text-white'}`}
           >
             {t.modeCategory}

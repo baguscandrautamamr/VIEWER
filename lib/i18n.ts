@@ -13,6 +13,7 @@ export const locales = {
       loading: 'Memuat model…',
       loadError: 'Gagal memuat model. Coba refresh halaman.',
       section: 'Section',
+      isolate: 'Isolate',
     },
     nav: { backToProjects: '← Daftar project' },
     sheets: {
@@ -81,6 +82,7 @@ export const locales = {
       loading: 'Loading model…',
       loadError: 'Failed to load model. Try refreshing the page.',
       section: 'Section',
+      isolate: 'Isolate',
     },
     nav: { backToProjects: '← Back to projects' },
     sheets: {

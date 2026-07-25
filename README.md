@@ -56,6 +56,28 @@ npm start        # jalankan hasil build
 Jalankan isi `supabase/schema.sql` di SQL Editor project Supabase kamu
 sebelum mulai development.
 
+## Update model (1 command)
+
+Setiap ada perubahan model, cukup jalankan satu command dari root repo —
+tidak perlu upload/paste manual. Script: baca IFC → convert ke GLB
+(IfcConvert) → upload ke Supabase Storage → deteksi kategori (nama family
+Revit) → isi tabel `elements` → tambah baris `model_versions` (versi naik,
+viewer yang lagi kebuka auto-reload lewat Realtime).
+
+```bash
+node scripts/push-model.mjs <file.ifc> <project_id> [pushed_by]
+```
+
+Butuh Node 18+ (pakai `fetch` bawaan, tanpa `npm install`). Konfigurasi
+diambil dari `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `IFCCONVERT_PATH`, `SUPABASE_BUCKET`).
+
+Kalau cuma mau generate SQL kategori untuk di-paste manual ke SQL Editor:
+
+```bash
+node scripts/ifc-to-elements-sql.mjs <file.ifc> <project_id> > elements.sql
+```
+
 ## Deploy
 
 Push ke GitHub → connect repo ke Vercel → isi env vars di

@@ -53,7 +53,7 @@ terpasang & Revit di-restart (langkah di bawah), buka tab **Revit Web Viewer**
 | Project ID | pakai tombol **Pilih…** (ambil dari Supabase) atau **Buat…** (bikin project baru langsung dari Revit). Tidak perlu buka SQL Editor. |
 | Bucket | `models` (default) |
 | IfcConvert.exe | `C:\ifcconvert\IfcConvert.exe` (pakai tombol **Cari…**) |
-| Present Base URL | domain Vercel kamu (opsional, buat cetak link) |
+| Present Base URL | **wajib** — alamat website (mis. `https://actviewer.vercel.app`). Dipakai upload model ke Google Drive + cetak link. |
 
 Klik **Simpan** → tersimpan di
 `%AppData%\RevitWebViewer\revit-web-viewer.config.json` (1 config dipakai

@@ -93,6 +93,7 @@ namespace RevitWebViewer
             if (string.IsNullOrWhiteSpace(ServiceRoleKey)) throw new Exception("Service Role Key belum diisi.");
             if (string.IsNullOrWhiteSpace(ProjectId)) throw new Exception("Project ID belum diisi.");
             if (string.IsNullOrWhiteSpace(IfcConvertPath)) throw new Exception("Path IfcConvert.exe belum diisi.");
+            if (string.IsNullOrWhiteSpace(PresentBaseUrl)) throw new Exception("Present Base URL belum diisi (alamat website, dibutuhkan untuk upload ke Google Drive).");
         }
 
         public void Normalize()

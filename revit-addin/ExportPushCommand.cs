@@ -177,14 +177,16 @@ namespace RevitWebViewer
             using (var sb = new SupabaseClient(cfg))
             {
                 int version = await sb.GetNextVersionAsync();
-                string storagePath = cfg.ProjectId + "/v" + version + "-" +
+                string fileName = cfg.ProjectId + "-v" + version + "-" +
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ".glb";
 
-                // 4) Upload GLB.
-                string publicUrl = await sb.UploadGlbAsync(storagePath, File.ReadAllBytes(glbPath));
+                // 4) Upload GLB ke Google Drive (lewat app -> langsung ke Google,
+                //    hindari limit body Vercel). Kembalikan Drive file id.
+                string driveFileId = await DriveUploader.UploadAsync(
+                    cfg.PresentBaseUrl, cfg.ServiceRoleKey, fileName, File.ReadAllBytes(glbPath));
 
                 // 5) Baris model_versions baru (memicu Realtime -> viewer auto-reload).
-                string versionId = await sb.InsertModelVersionAsync(version, publicUrl, pushedBy);
+                string versionId = await sb.InsertModelVersionAsync(version, driveFileId, pushedBy);
 
                 // 6) Upsert kategori tiap objek.
                 await sb.UpsertElementsAsync(versionId, rows);

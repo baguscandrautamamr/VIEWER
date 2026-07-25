@@ -156,7 +156,8 @@ export default function ModelViewer({
     // Subscribe ke perubahan push dari Revit — lihat lib/realtime.ts.
     const channel = subscribeToProjectUpdates(projectId, (version) => {
       setLiveUpdateMessage(t.liveUpdate);
-      loadModel(scene, version.glb_storage_path, version.changed_global_ids);
+      // Ambil model versi baru lewat proxy (Drive/Supabase ditangani server).
+      loadModel(scene, `/api/model/${version.id}`, version.changed_global_ids);
       setTimeout(() => setLiveUpdateMessage(null), HIGHLIGHT_DURATION_MS);
     });
 

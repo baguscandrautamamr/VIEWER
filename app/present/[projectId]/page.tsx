@@ -88,7 +88,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
         <div className="rounded border">
           <ModelViewer
             projectId={projectId}
-            initialGlbUrl={latestVersion.glb_storage_path}
+            initialGlbUrl={`/api/model/${latestVersion.id}`}
           />
         </div>
 

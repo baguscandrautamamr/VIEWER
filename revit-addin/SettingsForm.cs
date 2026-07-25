@@ -74,7 +74,7 @@ namespace RevitWebViewer
             AddRow(layout, "Present Base URL", _present);
             AddRow(layout, "", new Label
             {
-                Text = "Present Base URL opsional (buat cetak link). Field lain wajib.",
+                Text = "Present Base URL = alamat website (mis. https://actviewer.vercel.app). Wajib — dipakai upload model ke Google Drive & cetak link.",
                 AutoSize = true,
                 ForeColor = SystemColors.GrayText,
                 Margin = new Padding(0, 2, 0, 0)

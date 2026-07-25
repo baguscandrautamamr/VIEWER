@@ -1,0 +1,8 @@
+{
+  "SupabaseUrl": "https://xxxxxxxx.supabase.co",
+  "ServiceRoleKey": "PASTE_SERVICE_ROLE_KEY_DISINI",
+  "ProjectId": "222f2676-94d5-4f72-9a4c-9b033fef5a6e",
+  "Bucket": "models",
+  "IfcConvertPath": "C:\\ifcconvert\\IfcConvert.exe",
+  "PresentBaseUrl": "https://viewer-xxxx.vercel.app"
+}

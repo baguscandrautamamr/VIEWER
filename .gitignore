@@ -6,3 +6,8 @@ next-env.d.ts
 !.env.local.example
 .DS_Store
 *.log
+
+# Revit add-in: build output & config rahasia (service role key)
+revit-addin/bin/
+revit-addin/obj/
+revit-addin/revit-web-viewer.config.json

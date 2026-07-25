@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Manifest add-in. Salin file ini ke folder Addins Revit tiap versi:
+    Revit 2023: %AppData%\Autodesk\Revit\Addins\2023\
+    Revit 2025: %AppData%\Autodesk\Revit\Addins\2025\
+  Ganti <Assembly> ke path ABSOLUT DLL versi yang cocok (lihat README).
+-->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Revit Web Viewer</Name>
+    <Assembly>C:\RevitWebViewer\2025\RevitWebViewer.dll</Assembly>
+    <AddInId>3f2a9c10-8b7e-4c2a-9d1f-7a6b5c4d3e2f</AddInId>
+    <FullClassName>RevitWebViewer.App</FullClassName>
+    <VendorId>RWV</VendorId>
+    <VendorDescription>Revit Web Viewer</VendorDescription>
+  </AddIn>
+</RevitAddIns>

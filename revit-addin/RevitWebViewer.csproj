@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Add-in Revit Web Viewer — multi-target biar 1 source code jadi 2 DLL:
+      net48            -> Revit 2023 (.NET Framework 4.8)
+      net8.0-windows   -> Revit 2025 (.NET 8)
+
+    Build di Visual Studio 2022 (atau `dotnet build -c Release`). Tiap target
+    otomatis mereferensi RevitAPI dari folder instalasi versi yang cocok.
+    Kalau path instalasi Revit-mu beda, ubah Revit2023Dir / Revit2025Dir.
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Configuration Condition="'$(Configuration)'==''">Release</Configuration>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <AssemblyName>RevitWebViewer</AssemblyName>
+    <RootNamespace>RevitWebViewer</RootNamespace>
+
+    <!-- Ubah kalau Revit terinstall di lokasi lain -->
+    <Revit2023Dir>C:\Program Files\Autodesk\Revit 2023</Revit2023Dir>
+    <Revit2025Dir>C:\Program Files\Autodesk\Revit 2025</Revit2025Dir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Revit 2023 -> net48. Private=false: DLL Revit API JANGAN ikut di-copy. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="RevitAPI">
+      <HintPath>$(Revit2023Dir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(Revit2023Dir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <!-- Revit 2025 -> net8.0-windows -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <Reference Include="RevitAPI">
+      <HintPath>$(Revit2025Dir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(Revit2025Dir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

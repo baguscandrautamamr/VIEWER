@@ -1,0 +1,145 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
+using Autodesk.Revit.Attributes;
+using Autodesk.Revit.DB;
+using Autodesk.Revit.UI;
+
+namespace RevitWebViewer
+{
+    // Tombol "Export & Push". Alur meniru scripts/push-model.mjs:
+    // export IFC (view aktif) -> IfcConvert -> upload GLB -> kategori -> versi baru.
+    [Transaction(TransactionMode.ReadOnly)]
+    public class ExportPushCommand : IExternalCommand
+    {
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            UIDocument uidoc = commandData.Application.ActiveUIDocument;
+            if (uidoc == null) { TaskDialog.Show("Revit Web Viewer", "Buka project dulu."); return Result.Cancelled; }
+            Document doc = uidoc.Document;
+
+            Config cfg;
+            try { cfg = Config.Load(); }
+            catch (Exception ex) { TaskDialog.Show("Config Revit Web Viewer", ex.Message); return Result.Failed; }
+
+            // Wajib 3D view (yang sudah di-isolate ke electrical).
+            View view = doc.ActiveView;
+            if (!(view is View3D))
+            {
+                TaskDialog.Show("Revit Web Viewer",
+                    "Buka 3D view yang sudah di-isolate ke electrical dulu, baru klik Export & Push.");
+                return Result.Cancelled;
+            }
+
+            string workDir = Path.Combine(Path.GetTempPath(), "rwv-" + DateTime.Now.Ticks);
+            Directory.CreateDirectory(workDir);
+            string ifcPath = Path.Combine(workDir, "model.ifc");
+            string glbPath = Path.Combine(workDir, "model.glb");
+            string pushedBy = SafeUser(commandData);
+
+            try
+            {
+                // 1) Export IFC dari view aktif (Revit API -> harus di main thread).
+                var opt = new IFCExportOptions();
+                opt.FileVersion = IFCVersion.IFC2x3CV2;
+                opt.FilterViewId = view.Id;
+                bool ok = doc.Export(workDir, "model", opt);
+                if (!ok || !File.Exists(ifcPath))
+                    throw new Exception("Export IFC gagal dari view aktif.");
+
+                // 2..6) IfcConvert + upload + DB. Jalankan di Task.Run supaya
+                // panggilan HTTP async tidak deadlock dengan context UI Revit.
+                string resultMsg = Task.Run(() => DoPushAsync(cfg, ifcPath, glbPath, pushedBy))
+                    .GetAwaiter().GetResult();
+
+                TaskDialog.Show("Revit Web Viewer — Sukses", resultMsg);
+                return Result.Succeeded;
+            }
+            catch (Exception ex)
+            {
+                TaskDialog.Show("Revit Web Viewer — Gagal", ex.Message);
+                message = ex.Message;
+                return Result.Failed;
+            }
+            finally
+            {
+                try { Directory.Delete(workDir, true); } catch { /* biarin */ }
+            }
+        }
+
+        private static async Task<string> DoPushAsync(Config cfg, string ifcPath, string glbPath, string pushedBy)
+        {
+            // 2) IFC -> GLB via IfcConvert (subprocess).
+            RunIfcConvert(cfg.IfcConvertPath, ifcPath, glbPath);
+            if (!File.Exists(glbPath))
+                throw new Exception("GLB tidak terbentuk — cek IfcConvertPath di config.");
+
+            // 3) Parse kategori dari IFC.
+            var rows = IfcElementParser.Parse(File.ReadAllText(ifcPath));
+
+            using (var sb = new SupabaseClient(cfg))
+            {
+                int version = await sb.GetNextVersionAsync();
+                string storagePath = cfg.ProjectId + "/v" + version + "-" +
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ".glb";
+
+                // 4) Upload GLB.
+                string publicUrl = await sb.UploadGlbAsync(storagePath, File.ReadAllBytes(glbPath));
+
+                // 5) Baris model_versions baru (memicu Realtime -> viewer auto-reload).
+                string versionId = await sb.InsertModelVersionAsync(version, publicUrl, pushedBy);
+
+                // 6) Upsert kategori tiap objek.
+                await sb.UpsertElementsAsync(versionId, rows);
+
+                string token = await sb.GetTokenAsync();
+                string link = BuildPresentLink(cfg, token);
+
+                return "Versi v" + version + " ke-push.\n" +
+                       rows.Count + " objek, kategori terdeteksi.\n\n" +
+                       "Viewer yang sedang terbuka akan auto-update.\n" +
+                       (link != null ? "Link: " + link : "");
+            }
+        }
+
+        private static void RunIfcConvert(string exe, string ifcPath, string glbPath)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = "-y --use-element-guids \"" + ifcPath + "\" \"" + glbPath + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            try
+            {
+                using (var p = Process.Start(psi))
+                {
+                    // Warning material '<Unnamed>' di stderr itu wajar (non-fatal).
+                    p.StandardError.ReadToEnd();
+                    p.StandardOutput.ReadToEnd();
+                    p.WaitForExit();
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("Gagal menjalankan IfcConvert (" + exe + "): " + ex.Message);
+            }
+        }
+
+        private static string BuildPresentLink(Config cfg, string token)
+        {
+            if (string.IsNullOrWhiteSpace(cfg.PresentBaseUrl) || token == null) return null;
+            return cfg.PresentBaseUrl.TrimEnd('/') + "/present/" + cfg.ProjectId + "?t=" + token;
+        }
+
+        private static string SafeUser(ExternalCommandData cmd)
+        {
+            try { return "revit-" + cmd.Application.Application.Username; }
+            catch { return "revit-addin"; }
+        }
+    }
+}

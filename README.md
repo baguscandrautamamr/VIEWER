@@ -72,12 +72,8 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
   kamera digerakkan.
 - **Ganti Warna** — pilih elemen lalu pilih warna di kotak info (kiri bawah).
-- **Section box interaktif** — tombol *Section* menampilkan kotak potong di 3D
-  dengan **6 handle kubus yang bisa ditarik langsung pakai mouse** (X merah,
-  Y hijau, Z biru), gaya Navisworks. Ukuran kotak (P × L × T) tampil di panel,
-  tombol *Reset* mengembalikan ke ukuran penuh model.
-- Ditambah fitur lama: Isolate (objek/kategori), Coret markup, Fokus,
-  auto-update saat model di-push.
+- Ditambah fitur lama: Isolate (objek/kategori), Section box, Coret markup,
+  Fokus, auto-update saat model di-push.
 
 ## Setup database
 

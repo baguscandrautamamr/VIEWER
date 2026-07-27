@@ -53,6 +53,11 @@ npm start        # jalankan hasil build
 
 ## Fitur viewer 3D
 
+**Navigasi keyboard (mode 3D biasa/orbit, tanpa perlu masuk walkthrough):**
+**W** maju · **S** mundur · **A** kiri · **D** kanan · **Q** naik · **E** turun
+(mouse tetap bisa untuk putar/zoom). Tombol diabaikan saat sedang mengetik di
+kolom cari.
+
 Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 
 - **Struktur (☰)** — Selection Tree hierarki *Kategori → Elemen*. Checkbox

@@ -31,6 +31,7 @@ export const locales = {
       walkHint: 'Klik untuk masuk mode jalan',
       walkControls: 'W/S maju-mundur · A/D kiri-kanan · Q naik · E turun · Esc keluar',
       navKeys: 'Keyboard: W/S maju-mundur · A/D kiri-kanan · Q naik · E turun',
+      speed: 'Kecepatan',
     },
     tree: {
       title: 'Struktur Model',
@@ -135,6 +136,7 @@ export const locales = {
       walkHint: 'Click to enter walkthrough mode',
       walkControls: 'W/S move · A/D left-right · Q up · E down · Esc to exit',
       navKeys: 'Keyboard: W/S move · A/D left-right · Q up · E down',
+      speed: 'Speed',
     },
     tree: {
       title: 'Model Structure',

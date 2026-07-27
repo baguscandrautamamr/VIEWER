@@ -78,6 +78,9 @@ export default function ModelViewer({
   const walkingRef = useRef(false);
   const walkKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
   const walkSpeedRef = useRef(5);
+  // Pengali kecepatan gerak (diatur slider). Dipakai handler animate (ref) +
+  // state untuk UI.
+  const speedMultRef = useRef(1);
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
   // Navigasi keyboard di mode 3D biasa (orbit): W/S maju-mundur, A/D kiri-kanan,
   // Q naik, E turun — kamera & target OrbitControls digeser bersama (fly-through).
@@ -99,6 +102,8 @@ export default function ModelViewer({
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [measureDist, setMeasureDist] = useState<number | null>(null);
   const [walking, setWalking] = useState(false);
+  const [speedMult, setSpeedMult] = useState(1);
+  const [speedOpen, setSpeedOpen] = useState(false);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
@@ -350,7 +355,7 @@ export default function ModelViewer({
       if (walkingRef.current && walkControlsRef.current) {
         const wc = walkControlsRef.current;
         const k = walkKeysRef.current;
-        const step = walkSpeedRef.current * dt;
+        const step = walkSpeedRef.current * speedMultRef.current * dt;
         if (k.f) wc.moveForward(step);
         if (k.b) wc.moveForward(-step);
         if (k.l) wc.moveRight(-step);
@@ -362,7 +367,7 @@ export default function ModelViewer({
         // arah pandang, jadi orbit tetap berfungsi (gaya fly-through).
         const k = orbitKeysRef.current;
         if (controls.enabled && (k.f || k.b || k.l || k.r || k.up || k.down)) {
-          const step = walkSpeedRef.current * dt;
+          const step = walkSpeedRef.current * speedMultRef.current * dt;
           const forward = new THREE.Vector3();
           camera.getWorldDirection(forward);
           const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
@@ -909,6 +914,35 @@ export default function ModelViewer({
         <button onClick={() => selectTool('walk')} className={dockBtn(tool === 'walk')} title={t.walk}>
           🚶
         </button>
+        <div className="my-0.5 h-px w-9 bg-white/10" />
+        <button
+          onClick={() => setSpeedOpen((v) => !v)}
+          className={dockBtn(speedOpen)}
+          title={`${t.speed} (${speedMult.toFixed(1)}×)`}
+        >
+          ⚡
+        </button>
+        {speedOpen && (
+          <div className="mt-1 w-36 rounded border border-white/20 bg-black/70 p-2 text-white backdrop-blur">
+            <div className="mb-1 flex items-center justify-between text-[11px]">
+              <span className="opacity-70">{t.speed}</span>
+              <span className="font-semibold text-accent">{speedMult.toFixed(1)}×</span>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.1}
+              value={speedMult}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                speedMultRef.current = v;
+                setSpeedMult(v);
+              }}
+              className="w-full accent-accent"
+            />
+          </div>
+        )}
       </div>
 
       {/* Hint tool aktif (atas-tengah). */}

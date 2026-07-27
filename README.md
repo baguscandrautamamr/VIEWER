@@ -65,7 +65,9 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   kolom cari.
 - **Putar / Geser (Pan) / Walkthrough** — tool navigasi. Pan = seret untuk
   menggeser; Walkthrough = jalan first-person: **W/S** maju-mundur, **A/D**
-  geser, **Space/E** naik, **Shift/Q** turun, mouse lihat, **Esc** keluar.
+  geser, **Q** naik, **E** turun, mouse lihat, **Esc** keluar.
+- **Kecepatan (⚡)** — slider di dock kiri untuk mengatur kecepatan gerak
+  keyboard/walkthrough (0.1×–3×) supaya jalan di 3D tidak terlalu cepat.
 - **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
   titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
   kamera digerakkan.

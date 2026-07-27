@@ -53,10 +53,23 @@ npm start        # jalankan hasil build
 
 ## Fitur viewer 3D
 
-**Navigasi keyboard (mode 3D biasa/orbit, tanpa perlu masuk walkthrough):**
-**W** maju · **S** mundur · **A** kiri · **D** kanan · **Q** naik · **E** turun
-(mouse tetap bisa untuk putar/zoom). Tombol diabaikan saat sedang mengetik di
-kolom cari.
+### Kontrol navigasi
+
+| Input | Fungsi |
+|---|---|
+| Klik kiri + geser | Putar model (orbit) |
+| Klik kiri (tanpa geser) | Pilih & isolate elemen |
+| Scroll | Zoom |
+| **Shift + roda tengah + geser** | Putar model (orbit) |
+| **Shift + scroll** | Pandangan kamera atas/bawah |
+| **Shift + klik kiri + geser** | Pandangan kamera kiri/kanan |
+| **W / S** | Maju / mundur — **rata**, tidak menukik |
+| **A / D** | Geser kiri / kanan |
+| **Q / E** | Naik / turun |
+
+Tombol keyboard diabaikan saat sedang mengetik di kolom cari. Pandangan
+kiri/kanan & atas/bawah memutar kamera **di tempat** (posisi tidak pindah),
+berbeda dengan orbit yang mengelilingi model.
 
 Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 
@@ -72,8 +85,12 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
   kamera digerakkan.
 - **Ganti Warna** — pilih elemen lalu pilih warna di kotak info (kiri bawah).
-- Ditambah fitur lama: Isolate (objek/kategori), Section box, Coret markup,
-  Fokus, auto-update saat model di-push.
+- **Diam** — kunci putaran supaya model tidak berputar tak sengaja saat
+  presentasi. Klik kiri berhenti memutar (seleksi elemen tetap jalan), inersia
+  dimatikan sehingga berhenti seketika; zoom, geser, dan keyboard tetap
+  berfungsi, dan memutar tetap bisa lewat **Shift + roda tengah**.
+- Ditambah fitur lama: Isolate (objek/kategori), Section box (6 slider),
+  Coret markup, Fokus, auto-update saat model di-push.
 
 ## Setup database
 

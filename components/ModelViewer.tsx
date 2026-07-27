@@ -86,6 +86,18 @@ export default function ModelViewer({
   // Q naik, E turun — kamera & target OrbitControls digeser bersama (fly-through).
   const orbitKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
 
+  // --- Mode Diam & kontrol pandangan (Shift) ---
+  // Mode Diam: model tidak bisa diputar tak sengaja oleh klik kiri, dan inersia
+  // dimatikan supaya berhenti seketika. Zoom, geser, keyboard tetap jalan;
+  // memutar tetap bisa lewat Shift + roda tengah.
+  const lockOnRef = useRef(false);
+  // Status tombol Shift. Dilacak lewat keydown/keyup, BUKAN dibaca saat klik:
+  // OrbitControls memasang handler pointerdown-nya lebih dulu, jadi pemetaan
+  // tombol mouse harus sudah benar sebelum tombol ditekan.
+  const shiftDownRef = useRef(false);
+  // Drag "menoleh" kiri/kanan (Shift + klik kiri).
+  const lookDragRef = useRef<{ x: number } | null>(null);
+
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
@@ -104,6 +116,7 @@ export default function ModelViewer({
   const [walking, setWalking] = useState(false);
   const [speedMult, setSpeedMult] = useState(1);
   const [speedOpen, setSpeedOpen] = useState(false);
+  const [lockOn, setLockOn] = useState(false);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
@@ -120,6 +133,65 @@ export default function ModelViewer({
     if (!next) resetIsolation();
   }
 
+  // Tentukan fungsi tiap tombol mouse dari kombinasi tool + Shift + mode Diam.
+  // Dipanggil ulang setiap salah satunya berubah, SEBELUM tombol mouse ditekan.
+  function updateMouseButtons() {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const shift = shiftDownRef.current;
+
+    controls.mouseButtons.LEFT = shift
+      ? null // Shift + klik kiri dipakai untuk menoleh (ditangani manual)
+      : toolRef.current === 'pan'
+        ? THREE.MOUSE.PAN
+        : lockOnRef.current
+          ? null // mode Diam: klik kiri tidak memutar model
+          : THREE.MOUSE.ROTATE;
+
+    // Shift + roda tengah = orbit; tanpa Shift roda tengah tetap zoom.
+    controls.mouseButtons.MIDDLE = shift ? THREE.MOUSE.ROTATE : THREE.MOUSE.DOLLY;
+    // Saat Shift ditahan, scroll dipakai untuk menengadah/menunduk, bukan zoom.
+    controls.enableZoom = !shift;
+    controls.enableDamping = !lockOnRef.current;
+  }
+
+  function toggleLock() {
+    const next = !lockOnRef.current;
+    lockOnRef.current = next;
+    setLockOn(next);
+    updateMouseButtons();
+  }
+
+  // Putar arah pandang kamera DI TEMPAT (posisi kamera tidak pindah): vektor
+  // arah pandang diputar, lalu target OrbitControls ditaruh di ujungnya supaya
+  // orbit berikutnya berpusat di titik yang baru dilihat.
+  function lookAround(yaw: number, pitch: number) {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    const dir = controls.target.clone().sub(camera.position);
+    const dist = dir.length();
+    if (dist < 1e-6) return;
+    dir.normalize();
+
+    const up = new THREE.Vector3(0, 1, 0);
+    if (yaw) dir.applyAxisAngle(up, yaw);
+
+    if (pitch) {
+      const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+      if (right.lengthSq() > 1e-8) {
+        const next = dir.clone().applyAxisAngle(right, pitch);
+        // Jangan sampai melewati tegak lurus (kamera terbalik).
+        const angleFromUp = next.angleTo(up);
+        if (angleFromUp > 0.05 && angleFromUp < Math.PI - 0.05) dir.copy(next);
+      }
+    }
+
+    controls.target.copy(camera.position).addScaledVector(dir, dist);
+    controls.update();
+  }
+
   // Pilih tool navigasi. Mengatur perilaku mouse OrbitControls (pan/rotate),
   // dan masuk/keluar mode walkthrough (pointer lock).
   function selectTool(next: Tool) {
@@ -128,10 +200,7 @@ export default function ModelViewer({
     }
     toolRef.current = next;
     setToolState(next);
-    const controls = controlsRef.current;
-    if (controls) {
-      controls.mouseButtons.LEFT = next === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
-    }
+    updateMouseButtons();
     if (next === 'walk') {
       setMarkupOn(false);
       enterWalk();
@@ -205,6 +274,7 @@ export default function ModelViewer({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controlsRef.current = controls;
+    updateMouseButtons(); // pemetaan awal tombol mouse (tool/Shift/mode Diam)
 
     const walkControls = new PointerLockControls(camera, renderer.domElement);
     walkControlsRef.current = walkControls;
@@ -235,15 +305,57 @@ export default function ModelViewer({
       downX = event.clientX;
       downY = event.clientY;
       moved = false;
+      // Shift + klik kiri = menoleh kiri/kanan. OrbitControls sudah dilepas
+      // dari tombol kiri (LEFT = null saat Shift), jadi tidak bentrok.
+      if (event.shiftKey && event.button === 0 && !walkingRef.current) {
+        lookDragRef.current = { x: event.clientX };
+        renderer.domElement.setPointerCapture(event.pointerId);
+      }
     }
     function handlePointerMove(event: PointerEvent) {
       if (Math.abs(event.clientX - downX) > 4 || Math.abs(event.clientY - downY) > 4) {
         moved = true;
       }
+      const look = lookDragRef.current;
+      if (look) {
+        const dx = event.clientX - look.x;
+        look.x = event.clientX;
+        // Geser ke kanan -> pandangan menoleh ke kanan (putar searah jarum jam
+        // dilihat dari atas, jadi sudutnya negatif terhadap sumbu Y).
+        lookAround(-dx * 0.005, 0);
+      }
+    }
+    function handlePointerUp() {
+      lookDragRef.current = null;
+    }
+
+    // Shift + scroll = menengadah / menunduk. Zoom sudah dimatikan selama Shift
+    // ditahan (lihat updateMouseButtons), jadi tidak ikut memperbesar.
+    function handleWheel(event: WheelEvent) {
+      if (!event.shiftKey || walkingRef.current) return;
+      event.preventDefault();
+      lookAround(0, -Math.sign(event.deltaY) * 0.04);
+    }
+
+    // Lacak Shift supaya pemetaan tombol mouse sudah benar sebelum diklik.
+    function handleShift(event: KeyboardEvent) {
+      const down = event.type === 'keydown';
+      if (event.key !== 'Shift' || shiftDownRef.current === down) return;
+      shiftDownRef.current = down;
+      updateMouseButtons();
+    }
+    // Kalau fokus pindah dari halaman saat Shift ditahan, keyup tidak pernah
+    // sampai — reset supaya kontrol tidak tersangkut di mode Shift.
+    function handleBlur() {
+      if (!shiftDownRef.current) return;
+      shiftDownRef.current = false;
+      updateMouseButtons();
     }
 
     function handleClick(event: MouseEvent) {
       if (moved) return;
+      // Shift + klik dipakai untuk menoleh — jangan ubah seleksi elemen.
+      if (event.shiftKey) return;
       const activeTool = toolRef.current;
       if (activeTool === 'walk') return;
 
@@ -281,7 +393,13 @@ export default function ModelViewer({
     }
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
+    renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener('pointercancel', handlePointerUp);
+    renderer.domElement.addEventListener('wheel', handleWheel, { passive: false });
     renderer.domElement.addEventListener('click', handleClick);
+    window.addEventListener('keydown', handleShift);
+    window.addEventListener('keyup', handleShift);
+    window.addEventListener('blur', handleBlur);
 
     // Pemetaan tombol gerak (sama untuk orbit & walkthrough):
     //   W/S atau ↑/↓ = maju/mundur, A/D atau ←/→ = kiri/kanan,
@@ -370,6 +488,11 @@ export default function ModelViewer({
           const step = walkSpeedRef.current * speedMultRef.current * dt;
           const forward = new THREE.Vector3();
           camera.getWorldDirection(forward);
+          // Jalan RATA seperti walkthrough: buang komponen vertikal arah
+          // pandang, supaya W tidak menukik ke bawah saat kamera menunduk.
+          forward.y = 0;
+          if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1); // kamera tegak lurus
+          forward.normalize();
           const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
           const move = new THREE.Vector3();
           if (k.f) move.add(forward);
@@ -409,7 +532,13 @@ export default function ModelViewer({
     return () => {
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+      renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+      renderer.domElement.removeEventListener('pointercancel', handlePointerUp);
+      renderer.domElement.removeEventListener('wheel', handleWheel);
       renderer.domElement.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', handleShift);
+      window.removeEventListener('keyup', handleShift);
+      window.removeEventListener('blur', handleBlur);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', handleResize);
@@ -856,7 +985,9 @@ export default function ModelViewer({
           ? t.walkHint
           : markupOn
             ? t.markupFrozen
-            : `${t.isolateHint} · ${t.navKeys}`;
+            : lockOn
+              ? `${t.lockOnHint} · ${t.navKeys}`
+              : `${t.isolateHint} · ${t.navKeys}`;
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -945,9 +1076,12 @@ export default function ModelViewer({
         )}
       </div>
 
-      {/* Hint tool aktif (atas-tengah). */}
-      <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded bg-black/40 px-2 py-1 text-xs text-white opacity-80 backdrop-blur">
-        {toolHint}
+      {/* Hint tool aktif + pintasan Shift (atas-tengah). */}
+      <div className="pointer-events-none absolute left-1/2 top-3 z-20 max-w-[46%] -translate-x-1/2 rounded bg-black/40 px-2 py-1 text-center text-xs text-white opacity-80 backdrop-blur">
+        <div>{toolHint}</div>
+        {tool !== 'walk' && !markupOn && (
+          <div className="mt-0.5 text-[10px] opacity-70">{t.shiftKeys}</div>
+        )}
       </div>
 
       {/* Kontrol mode isolate + tampilan (kanan atas). */}
@@ -986,6 +1120,15 @@ export default function ModelViewer({
           className={`${btnBase} border border-white/20 bg-black/50 text-white backdrop-blur`}
         >
           {t.focus}
+        </button>
+        <button
+          onClick={toggleLock}
+          className={`${btnBase} border border-white/20 backdrop-blur ${
+            lockOn ? 'bg-accent text-black' : 'bg-black/50 text-white'
+          }`}
+          title={t.lockHint}
+        >
+          {t.lock}
         </button>
         <button
           onClick={() => setSectionOn((v) => !v)}

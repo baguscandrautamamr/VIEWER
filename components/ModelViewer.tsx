@@ -22,19 +22,8 @@ interface ModelViewerProps {
 }
 
 type IsolateMode = 'object' | 'category';
-// Tool navigasi/anotasi aktif (satu waktu satu tool), mirip Navisworks.
-type Tool = 'orbit' | 'pan' | 'measure' | 'walk' | 'comment';
-
-interface CommentRow {
-  id: string;
-  author: string | null;
-  body: string;
-  pos_x: number | null;
-  pos_y: number | null;
-  pos_z: number | null;
-  global_id: string | null;
-  created_at: string;
-}
+// Tool navigasi aktif (satu waktu satu tool), mirip Navisworks.
+type Tool = 'orbit' | 'pan' | 'measure' | 'walk';
 
 const DIMMED_OPACITY = 0.12;
 const HIGHLIGHT_DURATION_MS = 3000;
@@ -91,10 +80,6 @@ export default function ModelViewer({
   const walkSpeedRef = useRef(5);
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
 
-  // --- Komentar ---
-  const commentPosRef = useRef<Map<string, THREE.Vector3>>(new Map());
-  const commentMarkerEls = useRef<Map<string, HTMLDivElement>>(new Map());
-
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
@@ -110,17 +95,10 @@ export default function ModelViewer({
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [measureDist, setMeasureDist] = useState<number | null>(null);
-
-  const [comments, setComments] = useState<CommentRow[]>([]);
-  const [pendingComment, setPendingComment] = useState<{ pos: THREE.Vector3; globalId: string | null } | null>(null);
-  const [draftBody, setDraftBody] = useState('');
-  const [draftAuthor, setDraftAuthor] = useState('');
-  const [commentBusy, setCommentBusy] = useState(false);
-  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [walking, setWalking] = useState(false);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
-  const tc = locales[locale].comments;
 
   function changeMode(next: IsolateMode) {
     modeRef.current = next;
@@ -158,6 +136,7 @@ export default function ModelViewer({
     if (!wc) return;
     if (controls) controls.enabled = false;
     walkingRef.current = true;
+    setWalking(true);
     try {
       wc.lock();
     } catch {
@@ -186,45 +165,6 @@ export default function ModelViewer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  // Muat komentar tersimpan + subscribe realtime supaya pin dari user lain muncul.
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/comments?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (active && Array.isArray(d.comments)) setComments(d.comments);
-      })
-      .catch(() => {});
-
-    const channel = getSupabase()
-      .channel(`comments-${projectId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'comments', filter: `project_id=eq.${projectId}` },
-        (payload) => {
-          const row = payload.new as CommentRow;
-          setComments((prev) => (prev.some((c) => c.id === row.id) ? prev : [row, ...prev]));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      getSupabase().removeChannel(channel);
-    };
-  }, [projectId]);
-
-  // Peta id komentar -> posisi 3D (buat proyeksi marker tiap frame).
-  useEffect(() => {
-    const map = new Map<string, THREE.Vector3>();
-    comments.forEach((c) => {
-      if (c.pos_x != null && c.pos_y != null && c.pos_z != null) {
-        map.set(c.id, new THREE.Vector3(c.pos_x, c.pos_y, c.pos_z));
-      }
-    });
-    commentPosRef.current = map;
-  }, [comments]);
 
   // Setup scene sekali saat mount.
   useEffect(() => {
@@ -262,6 +202,7 @@ export default function ModelViewer({
     walkControlsRef.current = walkControls;
     walkControls.addEventListener('unlock', () => {
       walkingRef.current = false;
+      setWalking(false);
       if (controlsRef.current) controlsRef.current.enabled = !markupOn;
       if (toolRef.current === 'walk') {
         toolRef.current = 'orbit';
@@ -311,14 +252,6 @@ export default function ModelViewer({
         if (hit) addMeasurePoint(hit.point.clone());
         return;
       }
-      if (activeTool === 'comment') {
-        if (hit) {
-          const gid = ((hit.object as THREE.Mesh).userData.globalId as string) || null;
-          setActiveCommentId(null);
-          setPendingComment({ pos: hit.point.clone(), globalId: gid });
-        }
-        return;
-      }
 
       // orbit / pan -> seleksi + isolate
       if (hit) {
@@ -342,25 +275,49 @@ export default function ModelViewer({
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('click', handleClick);
 
-    // Keyboard walkthrough (WASD + Space/Shift), hanya efektif saat walking.
+    // Keyboard walkthrough — hanya efektif saat walking:
+    //   W/S atau ↑/↓ = maju/mundur, A/D atau ←/→ = geser kiri/kanan,
+    //   Space / E / PageUp = naik, Shift / Q / PageDown = turun.
+    function setWalkKey(e: KeyboardEvent, down: boolean): boolean {
+      const k = walkKeysRef.current;
+      switch (e.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          k.f = down;
+          return true;
+        case 'KeyS':
+        case 'ArrowDown':
+          k.b = down;
+          return true;
+        case 'KeyA':
+        case 'ArrowLeft':
+          k.l = down;
+          return true;
+        case 'KeyD':
+        case 'ArrowRight':
+          k.r = down;
+          return true;
+        case 'Space':
+        case 'KeyE':
+        case 'PageUp':
+          k.up = down;
+          return true;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+        case 'KeyQ':
+        case 'PageDown':
+          k.down = down;
+          return true;
+        default:
+          return false;
+      }
+    }
     function onKeyDown(e: KeyboardEvent) {
       if (!walkingRef.current) return;
-      const k = walkKeysRef.current;
-      if (e.code === 'KeyW' || e.code === 'ArrowUp') k.f = true;
-      else if (e.code === 'KeyS' || e.code === 'ArrowDown') k.b = true;
-      else if (e.code === 'KeyA' || e.code === 'ArrowLeft') k.l = true;
-      else if (e.code === 'KeyD' || e.code === 'ArrowRight') k.r = true;
-      else if (e.code === 'Space') k.up = true;
-      else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') k.down = true;
+      if (setWalkKey(e, true)) e.preventDefault();
     }
     function onKeyUp(e: KeyboardEvent) {
-      const k = walkKeysRef.current;
-      if (e.code === 'KeyW' || e.code === 'ArrowUp') k.f = false;
-      else if (e.code === 'KeyS' || e.code === 'ArrowDown') k.b = false;
-      else if (e.code === 'KeyA' || e.code === 'ArrowLeft') k.l = false;
-      else if (e.code === 'KeyD' || e.code === 'ArrowRight') k.r = false;
-      else if (e.code === 'Space') k.up = false;
-      else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') k.down = false;
+      if (setWalkKey(e, false) && walkingRef.current) e.preventDefault();
     }
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -416,7 +373,10 @@ export default function ModelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, initialGlbUrl]);
 
-  // Proyeksikan posisi 3D (marker komentar + label ukur) ke layar tiap frame.
+  // Dipanggil tiap frame: (1) jaga ukuran titik ukur tetap konstan di layar
+  // (tidak ikut membesar saat kamera mendekat), (2) proyeksikan label jarak
+  // ke titik tengah garis. Karena jalan di animate loop, posisi selalu
+  // ter-update saat kamera bergerak (label tidak hilang lagi).
   function updateOverlays() {
     const camera = cameraRef.current;
     const container = containerRef.current;
@@ -424,16 +384,18 @@ export default function ModelViewer({
     const w = container.clientWidth;
     const h = container.clientHeight;
 
-    commentMarkerEls.current.forEach((el, id) => {
-      const p = commentPosRef.current.get(id);
-      if (!p) return;
-      const v = p.clone().project(camera);
-      const behind = v.z > 1 || v.z < -1;
-      el.style.display = behind ? 'none' : '';
-      const x = (v.x * 0.5 + 0.5) * w;
-      const y = (-v.y * 0.5 + 0.5) * h;
-      el.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`;
-    });
+    // Skala marker ukur supaya radiusnya ~7px di layar berapapun jaraknya.
+    const group = measureGroupRef.current;
+    if (group && group.children.length) {
+      const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+      const targetPx = 7;
+      group.children.forEach((c) => {
+        if (!(c as THREE.Mesh).userData?.measureMarker) return;
+        const dist = camera.position.distanceTo(c.position);
+        const r = (targetPx * tanHalfFov * dist) / (h / 2);
+        c.scale.setScalar(r);
+      });
+    }
 
     const label = measureLabelElRef.current;
     const pts = measurePtsRef.current;
@@ -732,13 +694,16 @@ export default function ModelViewer({
     if (measurePtsRef.current.length >= 2) clearMeasure();
     measurePtsRef.current.push(p);
     const g = ensureMeasureGroup();
-    const r = (Math.max(...modelSizeRef.current.toArray()) || 1) * 0.008;
+    // Sphere radius 1 unit; skala sebenarnya diatur tiap frame di updateOverlays
+    // supaya ukurannya konstan di layar (tidak kegedean saat dekat objek).
     const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(r, 12, 12),
+      new THREE.SphereGeometry(1, 16, 16),
       new THREE.MeshBasicMaterial({ color: 0x22d3ee, depthTest: false })
     );
+    marker.userData.measureMarker = true;
     marker.renderOrder = 999;
     marker.position.copy(p);
+    marker.scale.setScalar(0.0001); // sementara, sebelum frame pertama menskalakan
     g.add(marker);
 
     if (measurePtsRef.current.length === 2) {
@@ -828,51 +793,6 @@ export default function ModelViewer({
     setHiddenIds(new Set());
   }
 
-  // --- Komentar ---
-  async function saveComment() {
-    if (!pendingComment || !draftBody.trim()) return;
-    setCommentBusy(true);
-    try {
-      const res = await fetch('/api/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId,
-          body: draftBody.trim(),
-          author: draftAuthor.trim() || undefined,
-          pos: { x: pendingComment.pos.x, y: pendingComment.pos.y, z: pendingComment.pos.z },
-          globalId: pendingComment.globalId,
-        }),
-      });
-      const d = await res.json();
-      if (res.ok && d.comment) {
-        setComments((prev) => (prev.some((c) => c.id === d.comment.id) ? prev : [d.comment, ...prev]));
-      }
-    } catch {
-      /* abaikan error jaringan; user bisa coba lagi */
-    } finally {
-      setCommentBusy(false);
-      setPendingComment(null);
-      setDraftBody('');
-    }
-  }
-
-  async function deleteComment(id: string) {
-    if (!window.confirm(tc.deleteConfirm)) return;
-    try {
-      const res = await fetch(`/api/comments?id=${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setComments((prev) => prev.filter((c) => c.id !== id));
-        setActiveCommentId(null);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        window.alert(d.error || 'Gagal menghapus komentar');
-      }
-    } catch {
-      /* abaikan */
-    }
-  }
-
   const btnBase = 'rounded px-2 py-1 text-xs transition-colors';
   const dockBtn = (active: boolean) =>
     `flex h-9 w-9 items-center justify-center rounded border text-base transition-colors ${
@@ -886,11 +806,9 @@ export default function ModelViewer({
         ? t.measureHint
         : tool === 'walk'
           ? t.walkHint
-          : tool === 'comment'
-            ? t.commentHint
-            : markupOn
-              ? t.markupFrozen
-              : t.isolateHint;
+          : markupOn
+            ? t.markupFrozen
+            : t.isolateHint;
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -947,9 +865,6 @@ export default function ModelViewer({
         </button>
         <button onClick={() => selectTool('walk')} className={dockBtn(tool === 'walk')} title={t.walk}>
           🚶
-        </button>
-        <button onClick={() => selectTool('comment')} className={dockBtn(tool === 'comment')} title={t.comment}>
-          💬
         </button>
       </div>
 
@@ -1058,8 +973,9 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Readout hasil ukur. */}
-      {tool === 'measure' && measureDist != null && (
+      {/* Readout hasil ukur — tetap tampil walau kamera digerakkan (bukan
+          hanya saat tool measure aktif) selama masih ada hasil. */}
+      {measureDist != null && (
         <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded border border-white/20 bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur">
           {t.measureResult}: <span className="font-semibold text-cyan-300">{measureDist.toFixed(2)} m</span>
           <button onClick={clearMeasure} className="ml-3 opacity-70 underline hover:opacity-100">
@@ -1071,86 +987,16 @@ export default function ModelViewer({
       {/* Label jarak melayang di titik tengah garis ukur. */}
       <div
         ref={measureLabelElRef}
-        className="pointer-events-none absolute left-0 top-0 z-20 rounded bg-cyan-500 px-1.5 py-0.5 text-[11px] font-semibold text-black"
+        className="pointer-events-none absolute left-0 top-0 z-20 rounded bg-cyan-500 px-1.5 py-0.5 text-[11px] font-semibold text-black shadow"
         style={{ display: 'none' }}
       >
         {measureDist != null ? `${measureDist.toFixed(2)} m` : ''}
       </div>
 
-      {/* Marker komentar (pin), diproyeksikan tiap frame. */}
-      {comments
-        .filter((c) => c.pos_x != null)
-        .map((c) => (
-          <div
-            key={c.id}
-            ref={(el) => {
-              if (el) commentMarkerEls.current.set(c.id, el);
-              else commentMarkerEls.current.delete(c.id);
-            }}
-            className="absolute left-0 top-0 z-30"
-            style={{ display: 'none' }}
-          >
-            <button
-              onClick={() => setActiveCommentId((cur) => (cur === c.id ? null : c.id))}
-              className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-amber-500 text-xs shadow-lg"
-              title={c.body}
-            >
-              💬
-            </button>
-            {activeCommentId === c.id && (
-              <div className="absolute bottom-8 left-1/2 w-52 -translate-x-1/2 rounded border border-white/20 bg-black/85 p-2 text-xs text-white backdrop-blur">
-                <p className="whitespace-pre-wrap break-words">{c.body}</p>
-                <div className="mt-1 flex items-center justify-between text-[10px] opacity-60">
-                  <span>{c.author || '—'}</span>
-                  <span>{new Date(c.created_at).toLocaleDateString()}</span>
-                </div>
-                <button
-                  onClick={() => deleteComment(c.id)}
-                  className="mt-1 text-[10px] text-red-400 hover:text-red-300"
-                >
-                  {tc.delete}
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-
-      {/* Form tambah komentar. */}
-      {pendingComment && (
-        <div className="absolute bottom-3 left-1/2 z-40 w-72 -translate-x-1/2 rounded border border-white/20 bg-black/85 p-3 text-white backdrop-blur">
-          <div className="mb-1 text-xs font-medium">{tc.add}</div>
-          <textarea
-            value={draftBody}
-            onChange={(e) => setDraftBody(e.target.value)}
-            placeholder={tc.placeholder}
-            rows={2}
-            autoFocus
-            className="mb-2 w-full resize-none rounded border border-white/15 bg-black/40 px-2 py-1 text-xs placeholder:text-white/40 focus:border-white/40 focus:outline-none"
-          />
-          <input
-            value={draftAuthor}
-            onChange={(e) => setDraftAuthor(e.target.value)}
-            placeholder={tc.author}
-            className="mb-2 w-full rounded border border-white/15 bg-black/40 px-2 py-1 text-xs placeholder:text-white/40 focus:border-white/40 focus:outline-none"
-          />
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => {
-                setPendingComment(null);
-                setDraftBody('');
-              }}
-              className={`${btnBase} border border-white/20 text-white`}
-            >
-              {tc.cancel}
-            </button>
-            <button
-              onClick={saveComment}
-              disabled={commentBusy || !draftBody.trim()}
-              className={`${btnBase} bg-accent text-black disabled:opacity-40`}
-            >
-              {commentBusy ? tc.saving : tc.save}
-            </button>
-          </div>
+      {/* Legenda kontrol saat mode walkthrough. */}
+      {walking && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded border border-white/20 bg-black/70 px-3 py-1.5 text-[11px] text-white backdrop-blur">
+          {t.walkControls}
         </div>
       )}
 

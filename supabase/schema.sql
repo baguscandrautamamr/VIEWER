@@ -67,28 +67,12 @@ create table model_files (
   created_at timestamptz default now()
 );
 
--- Komentar/anotasi client yang tersimpan. Ditempel ke titik 3D di model
--- (pos_x/y/z, koordinat world setelah model di-center) atau komentar umum
--- (posisi null). global_id opsional -> komentar terkait elemen tertentu.
-create table comments (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references projects(id) on delete cascade,
-  author text,
-  body text not null,
-  pos_x double precision,
-  pos_y double precision,
-  pos_z double precision,
-  global_id text,
-  created_at timestamptz default now()
-);
-
 -- Row Level Security.
 alter table projects enable row level security;
 alter table model_versions enable row level security;
 alter table sheets enable row level security;
 alter table elements enable row level security;
 alter table model_files enable row level security;
-alter table comments enable row level security;
 
 -- Kebijakan Fase 1 (token via query string, lihat bagian 11 spec):
 --
@@ -115,11 +99,6 @@ create policy "anon read elements"
 
 create policy "anon read model_files"
   on model_files for select to anon using (true);
-
--- Komentar: anon boleh baca (client viewer menampilkan pin komentar). INSERT &
--- DELETE lewat API route (service role), jadi tidak ada policy tulis untuk anon.
-create policy "anon read comments"
-  on comments for select to anon using (true);
 
 -- Supabase Realtime hanya mem-broadcast perubahan tabel yang masuk ke
 -- publication `supabase_realtime`. Tanpa baris ini, INSERT ke model_versions
@@ -153,24 +132,3 @@ alter table sheets add column if not exists camera_preset text;
 alter table sheets add column if not exists sort_order int default 0;
 -- Kontrol tampil/sembunyi sheet ke client (halaman Kelola). Aman berulang.
 alter table sheets add column if not exists is_visible boolean default true;
-
--- Tabel komentar/anotasi (Fase 4). Aman dijalankan berulang.
-create table if not exists comments (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references projects(id) on delete cascade,
-  author text,
-  body text not null,
-  pos_x double precision,
-  pos_y double precision,
-  pos_z double precision,
-  global_id text,
-  created_at timestamptz default now()
-);
-alter table comments enable row level security;
-do $$ begin
-  create policy "anon read comments" on comments for select to anon using (true);
-exception when duplicate_object then null; end $$;
--- Supaya pin komentar baru dari user lain muncul realtime tanpa refresh.
-do $$ begin
-  alter publication supabase_realtime add table comments;
-exception when duplicate_object then null; end $$;

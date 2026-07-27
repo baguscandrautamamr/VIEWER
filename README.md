@@ -59,12 +59,11 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   untuk show/hide per kategori/elemen, klik nama untuk isolate + fokus, ada
   kolom cari.
 - **Putar / Geser (Pan) / Walkthrough** — tool navigasi. Pan = seret untuk
-  menggeser; Walkthrough = jalan first-person (WASD gerak, mouse lihat, Esc
-  keluar).
-- **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis
-  di 3D.
-- **Komentar** — klik model untuk menaruh pin komentar. Komentar **tersimpan**
-  di Supabase (tabel `comments`) dan muncul realtime untuk viewer lain.
+  menggeser; Walkthrough = jalan first-person: **W/S** maju-mundur, **A/D**
+  geser, **Space/E** naik, **Shift/Q** turun, mouse lihat, **Esc** keluar.
+- **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
+  titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
+  kamera digerakkan.
 - **Ganti Warna** — pilih elemen lalu pilih warna di kotak info (kiri bawah).
 - Ditambah fitur lama: Isolate (objek/kategori), Section box, Coret markup,
   Fokus, auto-update saat model di-push.
@@ -72,9 +71,7 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 ## Setup database
 
 Jalankan isi `supabase/schema.sql` di SQL Editor project Supabase kamu
-sebelum mulai development. File ini idempotent — kalau database sudah ada,
-menjalankan ulang akan menambah tabel/kolom baru (mis. tabel `comments`
-untuk fitur komentar tersimpan) tanpa merusak data lama.
+sebelum mulai development.
 
 ## Update model (1 command)
 

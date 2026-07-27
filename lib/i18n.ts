@@ -32,6 +32,7 @@ export const locales = {
       walkControls: 'W/S maju-mundur · A/D kiri-kanan · Q naik · E turun · Esc keluar',
       navKeys: 'Keyboard: W/S maju-mundur · A/D kiri-kanan · Q naik · E turun',
       speed: 'Kecepatan',
+      sectionHint: 'Tarik kubus berwarna di 3D untuk memotong (X merah · Y hijau · Z biru).',
     },
     tree: {
       title: 'Struktur Model',
@@ -137,6 +138,7 @@ export const locales = {
       walkControls: 'W/S move · A/D left-right · Q up · E down · Esc to exit',
       navKeys: 'Keyboard: W/S move · A/D left-right · Q up · E down',
       speed: 'Speed',
+      sectionHint: 'Drag the colored cubes in 3D to cut (X red · Y green · Z blue).',
     },
     tree: {
       title: 'Model Structure',

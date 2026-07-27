@@ -44,6 +44,10 @@ export default function MarkupOverlay({
   const [, setVersion] = useState(0);
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState(COLORS[0]);
+  // Editing teks inline: input muncul di titik klik, ketik langsung di 3D
+  // (tanpa pop-up prompt). `x`/`y` = posisi baseline teks di kanvas.
+  const [editing, setEditing] = useState<{ x: number; y: number } | null>(null);
+  const [editValue, setEditValue] = useState('');
 
   const bump = () => setVersion((v) => v + 1);
 
@@ -120,16 +124,25 @@ export default function MarkupOverlay({
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  // Commit teks yang sedang diketik jadi shape permanen di kanvas.
+  function commitText() {
+    if (editing && editValue.trim()) {
+      shapesRef.current.push({ kind: 'text', color, x: editing.x, y: editing.y, text: editValue });
+      redraw();
+      bump();
+    }
+    setEditing(null);
+    setEditValue('');
+  }
+
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     const { x, y } = posOf(e);
 
     if (tool === 'text') {
-      const text = window.prompt(strings.textPrompt);
-      if (text) {
-        shapesRef.current.push({ kind: 'text', color, x, y, text });
-        redraw();
-        bump();
-      }
+      // Kalau sedang mengetik, klik di tempat lain = commit dulu (lewat onBlur),
+      // lalu buka editor baru di titik yang diklik.
+      setEditing({ x, y });
+      setEditValue('');
       return;
     }
 
@@ -218,6 +231,37 @@ export default function MarkupOverlay({
           active ? 'cursor-crosshair' : 'pointer-events-none'
         }`}
       />
+
+      {/* Input teks inline: ketik langsung di titik klik pada 3D (tanpa prompt).
+          Enter = simpan, Esc = batal, klik di luar = simpan otomatis. */}
+      {active && editing && (
+        <input
+          autoFocus
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitText();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              setEditing(null);
+              setEditValue('');
+            }
+          }}
+          onBlur={commitText}
+          placeholder={strings.textPrompt}
+          style={{
+            position: 'absolute',
+            left: editing.x,
+            top: editing.y - 16,
+            font: FONT,
+            color,
+            caretColor: color,
+          }}
+          className="z-30 min-w-[8rem] border-b-2 bg-transparent px-0.5 outline-none placeholder:text-white/40"
+        />
+      )}
 
       {active && (
         <div className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 flex-wrap items-center gap-2 rounded border border-white/20 bg-black/70 px-3 py-2 backdrop-blur">

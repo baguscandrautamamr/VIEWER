@@ -32,7 +32,10 @@ export const locales = {
       walkControls: 'W/S maju-mundur · A/D kiri-kanan · Q naik · E turun · Esc keluar',
       navKeys: 'Keyboard: W/S maju-mundur · A/D kiri-kanan · Q naik · E turun',
       speed: 'Kecepatan',
-      sectionHint: 'Tarik kubus berwarna di 3D untuk memotong (X merah · Y hijau · Z biru).',
+      lock: 'Diam',
+      lockHint: 'Kunci putaran — klik kiri tidak memutar model. Putar tetap bisa dengan Shift + roda tengah.',
+      lockOnHint: 'Mode diam — model dikunci, putar pakai Shift + roda tengah',
+      shiftKeys: 'Shift: roda tengah = putar · scroll = lihat atas/bawah · klik kiri geser = lihat kiri/kanan',
     },
     tree: {
       title: 'Struktur Model',
@@ -138,7 +141,10 @@ export const locales = {
       walkControls: 'W/S move · A/D left-right · Q up · E down · Esc to exit',
       navKeys: 'Keyboard: W/S move · A/D left-right · Q up · E down',
       speed: 'Speed',
-      sectionHint: 'Drag the colored cubes in 3D to cut (X red · Y green · Z blue).',
+      lock: 'Static',
+      lockHint: 'Lock rotation — left click no longer rotates the model. Shift + middle wheel still rotates.',
+      lockOnHint: 'Static mode — model locked, rotate with Shift + middle wheel',
+      shiftKeys: 'Shift: middle wheel = rotate · scroll = look up/down · left drag = look left/right',
     },
     tree: {
       title: 'Model Structure',

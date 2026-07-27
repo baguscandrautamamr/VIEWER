@@ -79,6 +79,9 @@ export default function ModelViewer({
   const walkKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
   const walkSpeedRef = useRef(5);
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
+  // Navigasi keyboard di mode 3D biasa (orbit): W/S maju-mundur, A/D kiri-kanan,
+  // Q naik, E turun — kamera & target OrbitControls digeser bersama (fly-through).
+  const orbitKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
 
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
@@ -275,49 +278,68 @@ export default function ModelViewer({
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('click', handleClick);
 
-    // Keyboard walkthrough — hanya efektif saat walking:
-    //   W/S atau ↑/↓ = maju/mundur, A/D atau ←/→ = geser kiri/kanan,
-    //   Space / E / PageUp = naik, Shift / Q / PageDown = turun.
-    function setWalkKey(e: KeyboardEvent, down: boolean): boolean {
-      const k = walkKeysRef.current;
+    // Pemetaan tombol gerak (sama untuk orbit & walkthrough):
+    //   W/S atau ↑/↓ = maju/mundur, A/D atau ←/→ = kiri/kanan,
+    //   Q / Space / PageUp = naik, E / Shift / PageDown = turun.
+    function setMoveKey(
+      target: { f: boolean; b: boolean; l: boolean; r: boolean; up: boolean; down: boolean },
+      e: KeyboardEvent,
+      down: boolean
+    ): boolean {
       switch (e.code) {
         case 'KeyW':
         case 'ArrowUp':
-          k.f = down;
+          target.f = down;
           return true;
         case 'KeyS':
         case 'ArrowDown':
-          k.b = down;
+          target.b = down;
           return true;
         case 'KeyA':
         case 'ArrowLeft':
-          k.l = down;
+          target.l = down;
           return true;
         case 'KeyD':
         case 'ArrowRight':
-          k.r = down;
+          target.r = down;
           return true;
+        case 'KeyQ':
         case 'Space':
-        case 'KeyE':
         case 'PageUp':
-          k.up = down;
+          target.up = down;
           return true;
+        case 'KeyE':
         case 'ShiftLeft':
         case 'ShiftRight':
-        case 'KeyQ':
         case 'PageDown':
-          k.down = down;
+          target.down = down;
           return true;
         default:
           return false;
       }
     }
+    // Abaikan tombol saat user sedang mengetik (mis. kolom cari Selection Tree),
+    // supaya huruf W/A/S/D tidak ikut menggerakkan kamera.
+    function isTyping(): boolean {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      return (
+        el.tagName === 'INPUT' ||
+        el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' ||
+        el.isContentEditable
+      );
+    }
     function onKeyDown(e: KeyboardEvent) {
-      if (!walkingRef.current) return;
-      if (setWalkKey(e, true)) e.preventDefault();
+      if (isTyping()) return;
+      const target = walkingRef.current ? walkKeysRef.current : orbitKeysRef.current;
+      if (setMoveKey(target, e, true)) e.preventDefault();
     }
     function onKeyUp(e: KeyboardEvent) {
-      if (setWalkKey(e, false) && walkingRef.current) e.preventDefault();
+      // Selalu lepaskan di kedua set supaya tak ada tombol "nyangkut".
+      const a = setMoveKey(walkKeysRef.current, e, false);
+      const b = setMoveKey(orbitKeysRef.current, e, false);
+      if (a || b) e.preventDefault();
     }
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -336,6 +358,27 @@ export default function ModelViewer({
         if (k.up) camera.position.y += step;
         if (k.down) camera.position.y -= step;
       } else {
+        // Navigasi keyboard di mode orbit: geser kamera + target bersama sesuai
+        // arah pandang, jadi orbit tetap berfungsi (gaya fly-through).
+        const k = orbitKeysRef.current;
+        if (controls.enabled && (k.f || k.b || k.l || k.r || k.up || k.down)) {
+          const step = walkSpeedRef.current * dt;
+          const forward = new THREE.Vector3();
+          camera.getWorldDirection(forward);
+          const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+          const move = new THREE.Vector3();
+          if (k.f) move.add(forward);
+          if (k.b) move.addScaledVector(forward, -1);
+          if (k.r) move.add(right);
+          if (k.l) move.addScaledVector(right, -1);
+          if (k.up) move.y += 1;
+          if (k.down) move.y -= 1;
+          if (move.lengthSq() > 0) {
+            move.normalize().multiplyScalar(step);
+            camera.position.add(move);
+            controls.target.add(move);
+          }
+        }
         controls.update();
       }
       updateOverlays();
@@ -801,14 +844,14 @@ export default function ModelViewer({
 
   const toolHint =
     tool === 'pan'
-      ? t.panHint
+      ? `${t.panHint} · ${t.navKeys}`
       : tool === 'measure'
         ? t.measureHint
         : tool === 'walk'
           ? t.walkHint
           : markupOn
             ? t.markupFrozen
-            : t.isolateHint;
+            : `${t.isolateHint} · ${t.navKeys}`;
 
   return (
     <div className="relative h-full w-full overflow-hidden">

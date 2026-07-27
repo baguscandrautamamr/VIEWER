@@ -29,7 +29,8 @@ export const locales = {
       measureResult: 'Jarak',
       measureClear: 'Hapus ukur',
       walkHint: 'Klik untuk masuk mode jalan',
-      walkControls: 'W/S maju-mundur · A/D geser · Space/E naik · Shift/Q turun · Esc keluar',
+      walkControls: 'W/S maju-mundur · A/D kiri-kanan · Q naik · E turun · Esc keluar',
+      navKeys: 'Keyboard: W/S maju-mundur · A/D kiri-kanan · Q naik · E turun',
     },
     tree: {
       title: 'Struktur Model',
@@ -132,7 +133,8 @@ export const locales = {
       measureResult: 'Distance',
       measureClear: 'Clear measure',
       walkHint: 'Click to enter walkthrough mode',
-      walkControls: 'W/S move · A/D strafe · Space/E up · Shift/Q down · Esc to exit',
+      walkControls: 'W/S move · A/D left-right · Q up · E down · Esc to exit',
+      navKeys: 'Keyboard: W/S move · A/D left-right · Q up · E down',
     },
     tree: {
       title: 'Model Structure',

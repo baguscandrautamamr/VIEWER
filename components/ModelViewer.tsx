@@ -344,9 +344,13 @@ export default function ModelViewer({
       shiftDownRef.current = down;
       updateMouseButtons();
     }
-    // Kalau fokus pindah dari halaman saat Shift ditahan, keyup tidak pernah
-    // sampai — reset supaya kontrol tidak tersangkut di mode Shift.
+    // Kalau fokus pindah dari halaman saat tombol ditahan, keyup tidak pernah
+    // sampai — reset semuanya supaya kontrol tidak tersangkut (mis. kamera
+    // terus berjalan sendiri karena W dianggap masih ditekan).
     function handleBlur() {
+      [walkKeysRef.current, orbitKeysRef.current].forEach((k) => {
+        k.f = k.b = k.l = k.r = k.up = k.down = false;
+      });
       if (!shiftDownRef.current) return;
       shiftDownRef.current = false;
       updateMouseButtons();
@@ -403,7 +407,10 @@ export default function ModelViewer({
 
     // Pemetaan tombol gerak (sama untuk orbit & walkthrough):
     //   W/S atau ↑/↓ = maju/mundur, A/D atau ←/→ = kiri/kanan,
-    //   Q / Space / PageUp = naik, E / Shift / PageDown = turun.
+    //   Q / Space / PageUp = naik, E / PageDown = turun.
+    // Shift SENGAJA tidak dipakai di sini: dia modifier untuk orbit/menoleh
+    // (roda tengah, scroll, klik kiri). Kalau ikut dipetakan sebagai "turun",
+    // menahan Shift bikin kamera meluncur turun terus.
     function setMoveKey(
       target: { f: boolean; b: boolean; l: boolean; r: boolean; up: boolean; down: boolean },
       e: KeyboardEvent,
@@ -432,8 +439,6 @@ export default function ModelViewer({
           target.up = down;
           return true;
         case 'KeyE':
-        case 'ShiftLeft':
-        case 'ShiftRight':
         case 'PageDown':
           target.down = down;
           return true;

@@ -5,10 +5,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { getSupabase } from '@/lib/supabase';
 import { locales, type Locale } from '@/lib/i18n';
 import MarkupOverlay from './MarkupOverlay';
+import SelectionTree, { type TreeCategory } from './SelectionTree';
 
 interface ModelViewerProps {
   projectId: string;
@@ -20,9 +22,25 @@ interface ModelViewerProps {
 }
 
 type IsolateMode = 'object' | 'category';
+// Tool navigasi/anotasi aktif (satu waktu satu tool), mirip Navisworks.
+type Tool = 'orbit' | 'pan' | 'measure' | 'walk' | 'comment';
+
+interface CommentRow {
+  id: string;
+  author: string | null;
+  body: string;
+  pos_x: number | null;
+  pos_y: number | null;
+  pos_z: number | null;
+  global_id: string | null;
+  created_at: string;
+}
 
 const DIMMED_OPACITY = 0.12;
 const HIGHLIGHT_DURATION_MS = 3000;
+const DEFAULT_CATEGORY = 'Default';
+// Palet warna untuk fitur "Ganti Warna" elemen terpilih.
+const PAINT_COLORS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ffffff'];
 
 export default function ModelViewer({
   projectId,
@@ -35,9 +53,9 @@ export default function ModelViewer({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const walkControlsRef = useRef<PointerLockControls | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   // 6 bidang potong (section box). Urutan: X+, X−, Y+, Y−, Z+, Z−.
-  // Normal menghadap ke DALAM box; constant di-set dari ukuran model.
   const clipPlanesRef = useRef<THREE.Plane[]>([
     new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
     new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
@@ -47,44 +65,68 @@ export default function ModelViewer({
     new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
   ]);
   const modelRootRef = useRef<THREE.Object3D | null>(null);
-  // Ukuran bounding box model (buat menghitung jarak kamera preset).
   const modelSizeRef = useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const meshesByGlobalId = useRef<Map<string, THREE.Mesh>>(new Map());
   const originalMaterials = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
-  // GlobalId -> category, diambil dari tabel `elements`. Dipakai untuk
-  // isolate per-kategori (klik 1 lighting -> semua lighting).
   const categoryByGlobalId = useRef<Map<string, string>>(new Map());
-  // Mode dibaca dari ref di dalam handler klik (handler dipasang sekali saat
-  // mount, jadi tidak lihat perubahan state biasa). State dipakai untuk UI.
   const modeRef = useRef<IsolateMode>('object');
-  // Isolate bisa dimatikan: klik tetap menampilkan info elemen, tapi tidak
-  // meredupkan objek lain. Ref dipakai handler klik (alasan sama seperti mode).
   const isolateOnRef = useRef(true);
-  // Satu material redup dipakai bersama semua mesh — jauh lebih hemat daripada
-  // bikin material baru per mesh tiap klik (model besar bisa puluhan ribu mesh).
   const dimMaterialRef = useRef<THREE.Material | null>(null);
+  // Mesh yang terakhir diklik (dipakai fitur ganti warna).
+  const selectedMeshRef = useRef<THREE.Mesh | null>(null);
+  // Override warna per globalId (fitur "Ganti Warna"). Bertahan lewat isolate.
+  const colorMatByGid = useRef<Map<string, THREE.Material>>(new Map());
+
+  // --- Tool aktif ---
+  const toolRef = useRef<Tool>('orbit');
+
+  // --- Measure (ukur jarak) ---
+  const measurePtsRef = useRef<THREE.Vector3[]>([]);
+  const measureGroupRef = useRef<THREE.Group | null>(null);
+  const measureLabelElRef = useRef<HTMLDivElement | null>(null);
+
+  // --- Walkthrough ---
+  const walkingRef = useRef(false);
+  const walkKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
+  const walkSpeedRef = useRef(5);
+  const clockRef = useRef<THREE.Clock>(new THREE.Clock());
+
+  // --- Komentar ---
+  const commentPosRef = useRef<Map<string, THREE.Vector3>>(new Map());
+  const commentMarkerEls = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
-  // Status load model: buat overlay "Memuat…"/"Gagal" supaya layar tidak blank
-  // tanpa penjelasan (mis. saat GLB besar / Draco gagal decode).
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
-  // Section box: on/off + posisi tiap sisi (0..1 fraksi dari setengah ukuran
-  // model; 1 = di tepi/tidak memotong, 0 = di tengah).
   const [markupOn, setMarkupOn] = useState(false);
   const [sectionOn, setSectionOn] = useState(false);
   const [clip, setClip] = useState({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
 
+  const [tool, setToolState] = useState<Tool>('orbit');
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [treeData, setTreeData] = useState<TreeCategory[]>([]);
+  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [measureDist, setMeasureDist] = useState<number | null>(null);
+
+  const [comments, setComments] = useState<CommentRow[]>([]);
+  const [pendingComment, setPendingComment] = useState<{ pos: THREE.Vector3; globalId: string | null } | null>(null);
+  const [draftBody, setDraftBody] = useState('');
+  const [draftAuthor, setDraftAuthor] = useState('');
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+
   const t = locales[locale].viewer;
+  const tt = locales[locale].tree;
+  const tc = locales[locale].comments;
 
   function changeMode(next: IsolateMode) {
     modeRef.current = next;
     setMode(next);
   }
 
-  // Nyalakan/matikan isolate. Saat dimatikan, kembalikan semua mesh ke normal.
   function toggleIsolate() {
     const next = !isolateOnRef.current;
     isolateOnRef.current = next;
@@ -92,9 +134,38 @@ export default function ModelViewer({
     if (!next) resetIsolation();
   }
 
+  // Pilih tool navigasi. Mengatur perilaku mouse OrbitControls (pan/rotate),
+  // dan masuk/keluar mode walkthrough (pointer lock).
+  function selectTool(next: Tool) {
+    if (toolRef.current === 'walk' && next !== 'walk') {
+      walkControlsRef.current?.unlock();
+    }
+    toolRef.current = next;
+    setToolState(next);
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.mouseButtons.LEFT = next === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    }
+    if (next === 'walk') {
+      setMarkupOn(false);
+      enterWalk();
+    }
+  }
+
+  function enterWalk() {
+    const wc = walkControlsRef.current;
+    const controls = controlsRef.current;
+    if (!wc) return;
+    if (controls) controls.enabled = false;
+    walkingRef.current = true;
+    try {
+      wc.lock();
+    } catch {
+      /* pointer lock ditolak browser — abaikan */
+    }
+  }
+
   // Ambil peta kategori tiap elemen dari Supabase (anon, dibatasi RLS).
-  // Kalau tabel `elements` masih kosong, mode kategori otomatis fallback ke
-  // isolate 1 objek — jadi tetap jalan, cuma belum grouping.
   useEffect(() => {
     let active = true;
     getSupabase()
@@ -108,14 +179,54 @@ export default function ModelViewer({
           if (row.category) map.set(row.global_id as string, row.category as string);
         });
         categoryByGlobalId.current = map;
+        buildTree(); // kategori dari DB baru datang -> susun ulang tree
       });
     return () => {
       active = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Setup scene sekali saat mount. Loading & reload GLB dipisah ke fungsi
-  // loadModel supaya bisa dipanggil ulang saat ada push baru dari Revit.
+  // Muat komentar tersimpan + subscribe realtime supaya pin dari user lain muncul.
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/comments?projectId=${projectId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (active && Array.isArray(d.comments)) setComments(d.comments);
+      })
+      .catch(() => {});
+
+    const channel = getSupabase()
+      .channel(`comments-${projectId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'comments', filter: `project_id=eq.${projectId}` },
+        (payload) => {
+          const row = payload.new as CommentRow;
+          setComments((prev) => (prev.some((c) => c.id === row.id) ? prev : [row, ...prev]));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      getSupabase().removeChannel(channel);
+    };
+  }, [projectId]);
+
+  // Peta id komentar -> posisi 3D (buat proyeksi marker tiap frame).
+  useEffect(() => {
+    const map = new Map<string, THREE.Vector3>();
+    comments.forEach((c) => {
+      if (c.pos_x != null && c.pos_y != null && c.pos_z != null) {
+        map.set(c.id, new THREE.Vector3(c.pos_x, c.pos_y, c.pos_z));
+      }
+    });
+    commentPosRef.current = map;
+  }, [comments]);
+
+  // Setup scene sekali saat mount.
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -132,8 +243,6 @@ export default function ModelViewer({
     camera.position.set(10, 10, 10);
     cameraRef.current = camera;
 
-    // preserveDrawingBuffer: wajib supaya isi canvas 3D masih bisa dibaca saat
-    // export PNG markup (tanpa ini hasilnya kosong karena buffer sudah di-clear).
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
@@ -141,12 +250,24 @@ export default function ModelViewer({
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.localClippingEnabled = true;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controlsRef.current = controls;
+
+    const walkControls = new PointerLockControls(camera, renderer.domElement);
+    walkControlsRef.current = walkControls;
+    walkControls.addEventListener('unlock', () => {
+      walkingRef.current = false;
+      if (controlsRef.current) controlsRef.current.enabled = !markupOn;
+      if (toolRef.current === 'walk') {
+        toolRef.current = 'orbit';
+        setToolState('orbit');
+      }
+    });
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -155,13 +276,9 @@ export default function ModelViewer({
 
     loadModel(scene, initialGlbUrl);
 
-    // Raycasting untuk isolate-on-click.
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    // Bedakan klik dari drag: OrbitControls tetap memicu event `click` setelah
-    // memutar model, yang bikin isolate berubah tanpa sengaja. Jadi klik cuma
-    // dihitung kalau pointer nyaris tidak bergeser.
     let downX = 0;
     let downY = 0;
     let moved = false;
@@ -177,7 +294,9 @@ export default function ModelViewer({
     }
 
     function handleClick(event: MouseEvent) {
-      if (moved) return; // barusan orbit/pan, bukan klik pilih objek
+      if (moved) return;
+      const activeTool = toolRef.current;
+      if (activeTool === 'walk') return;
 
       const rect = container.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -186,20 +305,35 @@ export default function ModelViewer({
       raycaster.setFromCamera(pointer, camera);
       const root = modelRootRef.current;
       const intersects = raycaster.intersectObjects(root ? [root] : scene.children, true);
+      const hit = intersects.find((i) => (i.object as THREE.Mesh).visible !== false) ?? intersects[0];
 
-      if (intersects.length > 0) {
-        const target = intersects[0].object as THREE.Mesh;
+      if (activeTool === 'measure') {
+        if (hit) addMeasurePoint(hit.point.clone());
+        return;
+      }
+      if (activeTool === 'comment') {
+        if (hit) {
+          const gid = ((hit.object as THREE.Mesh).userData.globalId as string) || null;
+          setActiveCommentId(null);
+          setPendingComment({ pos: hit.point.clone(), globalId: gid });
+        }
+        return;
+      }
+
+      // orbit / pan -> seleksi + isolate
+      if (hit) {
+        const target = hit.object as THREE.Mesh;
         const gid = (target.userData.globalId as string) || null;
-
+        selectedMeshRef.current = target;
         if (isolateOnRef.current) {
           if (modeRef.current === 'category') isolateByCategory(target);
           else isolateMesh(target);
         }
-
         setSelected({ globalId: gid ?? '—', category: categoryOf(target) });
         onElementSelect?.(gid);
       } else {
         resetIsolation();
+        selectedMeshRef.current = null;
         setSelected(null);
         onElementSelect?.(null);
       }
@@ -208,9 +342,46 @@ export default function ModelViewer({
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('click', handleClick);
 
+    // Keyboard walkthrough (WASD + Space/Shift), hanya efektif saat walking.
+    function onKeyDown(e: KeyboardEvent) {
+      if (!walkingRef.current) return;
+      const k = walkKeysRef.current;
+      if (e.code === 'KeyW' || e.code === 'ArrowUp') k.f = true;
+      else if (e.code === 'KeyS' || e.code === 'ArrowDown') k.b = true;
+      else if (e.code === 'KeyA' || e.code === 'ArrowLeft') k.l = true;
+      else if (e.code === 'KeyD' || e.code === 'ArrowRight') k.r = true;
+      else if (e.code === 'Space') k.up = true;
+      else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') k.down = true;
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      const k = walkKeysRef.current;
+      if (e.code === 'KeyW' || e.code === 'ArrowUp') k.f = false;
+      else if (e.code === 'KeyS' || e.code === 'ArrowDown') k.b = false;
+      else if (e.code === 'KeyA' || e.code === 'ArrowLeft') k.l = false;
+      else if (e.code === 'KeyD' || e.code === 'ArrowRight') k.r = false;
+      else if (e.code === 'Space') k.up = false;
+      else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') k.down = false;
+    }
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
     function animate() {
       requestAnimationFrame(animate);
-      controls.update();
+      const dt = clockRef.current.getDelta();
+      if (walkingRef.current && walkControlsRef.current) {
+        const wc = walkControlsRef.current;
+        const k = walkKeysRef.current;
+        const step = walkSpeedRef.current * dt;
+        if (k.f) wc.moveForward(step);
+        if (k.b) wc.moveForward(-step);
+        if (k.l) wc.moveRight(-step);
+        if (k.r) wc.moveRight(step);
+        if (k.up) camera.position.y += step;
+        if (k.down) camera.position.y -= step;
+      } else {
+        controls.update();
+      }
+      updateOverlays();
       renderer.render(scene, camera);
     }
     animate();
@@ -220,17 +391,12 @@ export default function ModelViewer({
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
     }
-    // Pakai ResizeObserver (bukan cuma window.resize) supaya canvas ikut
-    // menyesuaikan saat container melebar/menyempit — mis. waktu sidebar sheet
-    // dibuka/ditutup, viewer harus langsung isi ruang penuh.
     const resizeObserver = new ResizeObserver(() => handleResize());
     resizeObserver.observe(container);
     window.addEventListener('resize', handleResize);
 
-    // Subscribe ke perubahan push dari Revit — lihat lib/realtime.ts.
     const channel = subscribeToProjectUpdates(projectId, (version) => {
       setLiveUpdateMessage(t.liveUpdate);
-      // Ambil model versi baru lewat proxy (Drive/Supabase ditangani server).
       loadModel(scene, `/api/model/${version.id}`, version.changed_global_ids);
       setTimeout(() => setLiveUpdateMessage(null), HIGHLIGHT_DURATION_MS);
     });
@@ -239,6 +405,8 @@ export default function ModelViewer({
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       unsubscribe(channel);
@@ -248,13 +416,45 @@ export default function ModelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, initialGlbUrl]);
 
-  // Klik sheet -> pindahkan kamera ke sudut preset. Model sudah di-center ke
-  // origin (lihat frameCameraToObject) & scene Y-up, jadi target = (0,0,0).
+  // Proyeksikan posisi 3D (marker komentar + label ukur) ke layar tiap frame.
+  function updateOverlays() {
+    const camera = cameraRef.current;
+    const container = containerRef.current;
+    if (!camera || !container) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+
+    commentMarkerEls.current.forEach((el, id) => {
+      const p = commentPosRef.current.get(id);
+      if (!p) return;
+      const v = p.clone().project(camera);
+      const behind = v.z > 1 || v.z < -1;
+      el.style.display = behind ? 'none' : '';
+      const x = (v.x * 0.5 + 0.5) * w;
+      const y = (-v.y * 0.5 + 0.5) * h;
+      el.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`;
+    });
+
+    const label = measureLabelElRef.current;
+    const pts = measurePtsRef.current;
+    if (label && pts.length === 2) {
+      const mid = pts[0].clone().add(pts[1]).multiplyScalar(0.5);
+      const v = mid.project(camera);
+      const behind = v.z > 1 || v.z < -1;
+      label.style.display = behind ? 'none' : '';
+      const x = (v.x * 0.5 + 0.5) * w;
+      const y = (-v.y * 0.5 + 0.5) * h;
+      label.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+    } else if (label) {
+      label.style.display = 'none';
+    }
+  }
+
   function applyCameraPreset(preset: string) {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
-    const key = preset.split('#')[0]; // buang suffix tick ("top#3" -> "top")
+    const key = preset.split('#')[0];
     const size = modelSizeRef.current;
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const d = maxDim * 1.9;
@@ -273,7 +473,6 @@ export default function ModelViewer({
     controls.update();
   }
 
-  // Terapkan preset kamera saat prop cameraPreset berubah (klik sheet).
   useEffect(() => {
     if (cameraPreset) applyCameraPreset(cameraPreset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -282,44 +481,39 @@ export default function ModelViewer({
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     setLoadState('loading');
     const loader = new GLTFLoader();
-    // Dukung GLB terkompresi Draco (KHR_draco_mesh_compression). Decoder di-serve
-    // dari /public/draco (lihat public/draco), jadi tidak bergantung CDN.
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('/draco/');
     loader.setDRACOLoader(dracoLoader);
     loader.load(
       glbUrl,
       (gltf) => {
-        // Buang model versi lama sebelum pasang yang baru (group root, bukan
-        // per-mesh — mesh-nya anak dari group ini, bukan anak langsung scene).
         if (modelRootRef.current) scene.remove(modelRootRef.current);
         meshesByGlobalId.current.clear();
         originalMaterials.current.clear();
+        colorMatByGid.current.clear();
+        selectedMeshRef.current = null;
 
         gltf.scene.traverse((child) => {
           if (child instanceof THREE.Mesh) {
-            // GlobalId ikut terbawa dari IFC -> glTF extras saat convert.
             const globalId = child.userData?.gltfExtensions?.globalId ?? child.name;
             child.userData.globalId = globalId;
             meshesByGlobalId.current.set(globalId, child);
             originalMaterials.current.set(child, child.material);
-
-            if (highlightIds.includes(globalId)) {
-              flashHighlight(child);
-            }
+            if (highlightIds.includes(globalId)) flashHighlight(child);
           }
         });
 
         scene.add(gltf.scene);
         modelRootRef.current = gltf.scene;
         frameCameraToObject(gltf.scene);
+        setHiddenCategories(new Set());
+        setHiddenIds(new Set());
+        buildTree();
         setLoadState('ready');
-        dracoLoader.dispose(); // bebaskan worker decoder Draco
+        dracoLoader.dispose();
       },
       undefined,
       (err) => {
-        // Kalau GLB gagal di-load (CORS, URL salah, file rusak, Draco tak ke-
-        // decode), catat di console + tampilkan overlay error, jangan blank.
         console.error('Gagal load GLB:', glbUrl, err);
         setLoadState('error');
         dracoLoader.dispose();
@@ -327,16 +521,50 @@ export default function ModelViewer({
     );
   }
 
-  // Tombol "Fokus": frame ulang kamera ke model saat ini (kalau model ke luar
-  // layar / user tersesat saat orbit). Aman dipanggil berulang — model sudah
-  // di-center ke origin, jadi cuma reposisi kamera.
+  // Susun data Selection Tree dari mesh yang sudah dimuat, dikelompokkan per
+  // kategori (gabungan data DB `elements` + fallback nama mesh IfcConvert).
+  function buildTree() {
+    const root = modelRootRef.current;
+    if (!root) return;
+    const byCat = new Map<string, Map<string, string>>(); // cat -> (gid -> name)
+    root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const gid = (child.userData.globalId as string) || child.name || '';
+      if (!gid) return;
+      const cat = categoryOf(child) ?? DEFAULT_CATEGORY;
+      if (!byCat.has(cat)) byCat.set(cat, new Map());
+      const inner = byCat.get(cat)!;
+      if (!inner.has(gid)) inner.set(gid, child.name || gid);
+    });
+    const cats: TreeCategory[] = Array.from(byCat.entries())
+      .map(([category, inner]) => ({
+        category,
+        elements: Array.from(inner.entries()).map(([globalId, name]) => ({ globalId, name })),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category));
+    setTreeData(cats);
+  }
+
   function focusModel() {
     if (modelRootRef.current) frameCameraToObject(modelRootRef.current);
   }
 
-  // Terapkan section box: hitung constant tiap bidang dari ukuran model, lalu
-  // pasang ke renderer.clippingPlanes (global -> memotong semua objek). Kalau
-  // section off, kosongkan supaya tidak ada potongan.
+  function focusOnMesh(mesh: THREE.Mesh) {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const box = new THREE.Box3().setFromObject(mesh);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const dist = maxDim * 2.5;
+    const dir = new THREE.Vector3(1, 0.8, 1).normalize();
+    camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+    controls.target.copy(center);
+    controls.update();
+  }
+
   function applyClipping() {
     const renderer = rendererRef.current;
     if (!renderer) return;
@@ -354,8 +582,6 @@ export default function ModelViewer({
     renderer.clippingPlanes = sectionOn ? clipPlanesRef.current : [];
   }
 
-  // Re-apply saat toggle/slider berubah, atau saat model baru selesai load
-  // (ukuran model baru diketahui setelah 'ready').
   useEffect(() => {
     applyClipping();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -365,17 +591,10 @@ export default function ModelViewer({
     setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
   }
 
-  // Bekukan orbit/zoom selama mode coret, supaya gambar tetap pas dengan
-  // tampilan 3D di layar (coretan hidup di screen space, tidak ikut berputar).
   useEffect(() => {
-    if (controlsRef.current) controlsRef.current.enabled = !markupOn;
+    if (controlsRef.current) controlsRef.current.enabled = !markupOn && !walkingRef.current;
   }, [markupOn]);
 
-  // Model IFC dari Revit sering pakai koordinat dunia yang jauh dari origin
-  // (survey/shared coords) dan ukurannya bervariasi. Tanpa ini, kamera default
-  // (10,10,10) nunjuk ke (0,0,0) dan modelnya "di luar layar" -> viewport hitam.
-  // Jadi: pindahkan center model ke origin, lalu set jarak & near/far kamera
-  // berdasarkan ukuran model biar selalu ke-frame pas.
   function frameCameraToObject(object: THREE.Object3D) {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -387,11 +606,12 @@ export default function ModelViewer({
 
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
-    object.position.sub(center); // center model -> (0,0,0)
+    object.position.sub(center);
     modelSizeRef.current = size.clone();
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const dist = maxDim * 1.8;
+    walkSpeedRef.current = maxDim * 0.4; // kecepatan jalan relatif ukuran model
     camera.near = Math.max(maxDim / 1000, 0.01);
     camera.far = maxDim * 100;
     camera.position.set(dist, dist * 0.8, dist);
@@ -400,10 +620,6 @@ export default function ModelViewer({
     controls.update();
   }
 
-  // Iterasi SEMUA mesh model lewat traverse — jangan pakai meshesByGlobalId,
-  // karena Map itu 1 entri per globalId: kalau banyak mesh punya nama sama
-  // (atau nama kosong), mesh-mesh lain hilang dari Map dan tidak pernah
-  // ikut diredupkan — isolate jadi kelihatan "tidak jalan".
   function forEachMesh(cb: (mesh: THREE.Mesh) => void) {
     const root = modelRootRef.current;
     if (!root) return;
@@ -412,9 +628,6 @@ export default function ModelViewer({
     });
   }
 
-  // Kategori sebuah mesh: utamakan data dari tabel `elements` (hasil parse IFC).
-  // Kalau belum ada (mis. model di-upload manual tanpa push script), fallback
-  // ke nama mesh dari IfcConvert yang biasanya "NamaFamily:Tipe:Id".
   function categoryOf(mesh: THREE.Mesh): string | null {
     const gid = (mesh.userData.globalId as string) || '';
     const fromDb = categoryByGlobalId.current.get(gid);
@@ -424,7 +637,6 @@ export default function ModelViewer({
     return null;
   }
 
-  // Mode "Objek": cuma 1 mesh yang diklik yang tetap terang.
   function isolateMesh(target: THREE.Mesh) {
     forEachMesh((mesh) => {
       if (mesh === target) restoreMesh(mesh);
@@ -432,9 +644,6 @@ export default function ModelViewer({
     });
   }
 
-  // Mode "Kategori": semua mesh dengan kategori sama seperti yang diklik
-  // tetap terang. Kalau elemen yang diklik belum punya data kategori,
-  // fallback ke isolate 1 objek biar tetap ada efeknya.
   function isolateByCategory(target: THREE.Mesh) {
     const targetCat = categoryOf(target);
     if (!targetCat) {
@@ -451,9 +660,14 @@ export default function ModelViewer({
     forEachMesh((mesh) => restoreMesh(mesh));
   }
 
+  // Kembalikan material mesh: override warna (kalau ada) diprioritaskan,
+  // baru material asli.
   function restoreMesh(mesh: THREE.Mesh) {
+    const gid = (mesh.userData.globalId as string) || '';
+    const override = colorMatByGid.current.get(gid);
     const original = originalMaterials.current.get(mesh);
-    if (original) mesh.material = original;
+    if (override) mesh.material = override;
+    else if (original) mesh.material = original;
   }
 
   function dimMesh(mesh: THREE.Mesh) {
@@ -469,8 +683,6 @@ export default function ModelViewer({
   }
 
   function flashHighlight(mesh: THREE.Mesh) {
-    // Highlight sementara untuk element yang baru berubah dari push
-    // terakhir. Warna aksen bisa disesuaikan ke identitas project.
     const highlightMaterial = new THREE.MeshStandardMaterial({
       color: 0xffc107,
       emissive: 0xffc107,
@@ -483,18 +695,271 @@ export default function ModelViewer({
     }, HIGHLIGHT_DURATION_MS);
   }
 
+  // --- Ganti warna elemen terpilih ---
+  function applyColor(hex: string) {
+    const mesh = selectedMeshRef.current;
+    if (!mesh) return;
+    const gid = (mesh.userData.globalId as string) || '';
+    if (!gid) return;
+    const orig = originalMaterials.current.get(mesh);
+    const base = (Array.isArray(orig) ? orig[0] : orig) as THREE.Material | undefined;
+    const clone = base ? (base.clone() as THREE.Material) : new THREE.MeshStandardMaterial();
+    // @ts-expect-error material standar punya .color
+    clone.color = new THREE.Color(hex);
+    colorMatByGid.current.set(gid, clone);
+    restoreMesh(mesh);
+  }
+
+  function resetColor() {
+    const mesh = selectedMeshRef.current;
+    if (!mesh) return;
+    const gid = (mesh.userData.globalId as string) || '';
+    colorMatByGid.current.delete(gid);
+    restoreMesh(mesh);
+  }
+
+  // --- Measure (ukur jarak) ---
+  function ensureMeasureGroup(): THREE.Group {
+    if (!measureGroupRef.current && sceneRef.current) {
+      const g = new THREE.Group();
+      sceneRef.current.add(g);
+      measureGroupRef.current = g;
+    }
+    return measureGroupRef.current!;
+  }
+
+  function addMeasurePoint(p: THREE.Vector3) {
+    if (measurePtsRef.current.length >= 2) clearMeasure();
+    measurePtsRef.current.push(p);
+    const g = ensureMeasureGroup();
+    const r = (Math.max(...modelSizeRef.current.toArray()) || 1) * 0.008;
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x22d3ee, depthTest: false })
+    );
+    marker.renderOrder = 999;
+    marker.position.copy(p);
+    g.add(marker);
+
+    if (measurePtsRef.current.length === 2) {
+      const geom = new THREE.BufferGeometry().setFromPoints(measurePtsRef.current);
+      const line = new THREE.Line(
+        geom,
+        new THREE.LineBasicMaterial({ color: 0x22d3ee, depthTest: false })
+      );
+      line.renderOrder = 999;
+      g.add(line);
+      setMeasureDist(measurePtsRef.current[0].distanceTo(measurePtsRef.current[1]));
+    } else {
+      setMeasureDist(null);
+    }
+  }
+
+  function clearMeasure() {
+    const g = measureGroupRef.current;
+    if (g) {
+      g.children.slice().forEach((c) => {
+        g.remove(c);
+        const m = c as THREE.Mesh | THREE.Line;
+        m.geometry?.dispose();
+        const mat = m.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+        else mat?.dispose();
+      });
+    }
+    measurePtsRef.current = [];
+    setMeasureDist(null);
+  }
+
+  // --- Selection Tree callbacks ---
+  function selectElementById(gid: string) {
+    const mesh = meshesByGlobalId.current.get(gid);
+    if (!mesh) return;
+    selectedMeshRef.current = mesh;
+    if (isolateOnRef.current) {
+      if (modeRef.current === 'category') isolateByCategory(mesh);
+      else isolateMesh(mesh);
+    }
+    setSelected({ globalId: gid, category: categoryOf(mesh) });
+    onElementSelect?.(gid);
+    focusOnMesh(mesh);
+  }
+
+  function selectCategory(cat: string) {
+    const mesh = meshesByGlobalId.current.get(
+      treeData.find((c) => c.category === cat)?.elements[0]?.globalId ?? ''
+    );
+    if (isolateOnRef.current && mesh) isolateByCategory(mesh);
+    if (mesh) {
+      selectedMeshRef.current = mesh;
+      setSelected({ globalId: mesh.userData.globalId as string, category: cat });
+    }
+  }
+
+  function setElementVisible(gid: string, visible: boolean) {
+    forEachMesh((mesh) => {
+      if ((mesh.userData.globalId as string) === gid) mesh.visible = visible;
+    });
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      if (visible) next.delete(gid);
+      else next.add(gid);
+      return next;
+    });
+  }
+
+  function setCategoryVisible(cat: string, visible: boolean) {
+    forEachMesh((mesh) => {
+      if ((categoryOf(mesh) ?? DEFAULT_CATEGORY) === cat) mesh.visible = visible;
+    });
+    setHiddenCategories((prev) => {
+      const next = new Set(prev);
+      if (visible) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }
+
+  function showAll() {
+    forEachMesh((mesh) => {
+      mesh.visible = true;
+    });
+    setHiddenCategories(new Set());
+    setHiddenIds(new Set());
+  }
+
+  // --- Komentar ---
+  async function saveComment() {
+    if (!pendingComment || !draftBody.trim()) return;
+    setCommentBusy(true);
+    try {
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          body: draftBody.trim(),
+          author: draftAuthor.trim() || undefined,
+          pos: { x: pendingComment.pos.x, y: pendingComment.pos.y, z: pendingComment.pos.z },
+          globalId: pendingComment.globalId,
+        }),
+      });
+      const d = await res.json();
+      if (res.ok && d.comment) {
+        setComments((prev) => (prev.some((c) => c.id === d.comment.id) ? prev : [d.comment, ...prev]));
+      }
+    } catch {
+      /* abaikan error jaringan; user bisa coba lagi */
+    } finally {
+      setCommentBusy(false);
+      setPendingComment(null);
+      setDraftBody('');
+    }
+  }
+
+  async function deleteComment(id: string) {
+    if (!window.confirm(tc.deleteConfirm)) return;
+    try {
+      const res = await fetch(`/api/comments?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setComments((prev) => prev.filter((c) => c.id !== id));
+        setActiveCommentId(null);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        window.alert(d.error || 'Gagal menghapus komentar');
+      }
+    } catch {
+      /* abaikan */
+    }
+  }
+
   const btnBase = 'rounded px-2 py-1 text-xs transition-colors';
+  const dockBtn = (active: boolean) =>
+    `flex h-9 w-9 items-center justify-center rounded border text-base transition-colors ${
+      active ? 'border-accent bg-accent text-black' : 'border-white/20 bg-black/50 text-white hover:bg-black/70'
+    }`;
+
+  const toolHint =
+    tool === 'pan'
+      ? t.panHint
+      : tool === 'measure'
+        ? t.measureHint
+        : tool === 'walk'
+          ? t.walkHint
+          : tool === 'comment'
+            ? t.commentHint
+            : markupOn
+              ? t.markupFrozen
+              : t.isolateHint;
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full overflow-hidden">
       <div ref={containerRef} className="h-full w-full" />
 
-      <div className="pointer-events-none absolute left-3 top-3 z-30 text-xs opacity-70">
-        {markupOn ? t.markupFrozen : t.isolateHint}
+      {/* Panel Selection Tree (kiri, collapsible). */}
+      <aside
+        className={`absolute left-0 top-0 z-30 h-full overflow-hidden border-r border-white/10 bg-black/70 backdrop-blur transition-all duration-300 ${
+          treeOpen ? 'w-64' : 'w-0'
+        }`}
+      >
+        {treeOpen && (
+          <div className="relative h-full">
+            <button
+              onClick={() => setTreeOpen(false)}
+              className="absolute right-1 top-1.5 z-10 rounded px-1.5 text-sm text-white/60 hover:text-white"
+              aria-label="close"
+            >
+              ✕
+            </button>
+            <SelectionTree
+              categories={treeData}
+              strings={tt}
+              hiddenCategories={hiddenCategories}
+              hiddenIds={hiddenIds}
+              selectedId={selected?.globalId ?? null}
+              onSelectElement={selectElementById}
+              onSelectCategory={selectCategory}
+              onToggleCategory={setCategoryVisible}
+              onToggleElement={setElementVisible}
+              onShowAll={showAll}
+            />
+          </div>
+        )}
+      </aside>
+
+      {/* Dock tool navigasi/anotasi (kiri, geser saat tree dibuka). */}
+      <div
+        className="absolute top-3 z-30 flex flex-col gap-1 transition-all duration-300"
+        style={{ left: treeOpen ? '17rem' : '0.75rem' }}
+      >
+        <button onClick={() => setTreeOpen((v) => !v)} className={dockBtn(treeOpen)} title={t.tree}>
+          ☰
+        </button>
+        <div className="my-0.5 h-px w-9 bg-white/10" />
+        <button onClick={() => selectTool('orbit')} className={dockBtn(tool === 'orbit')} title={t.orbit}>
+          ⟲
+        </button>
+        <button onClick={() => selectTool('pan')} className={dockBtn(tool === 'pan')} title={t.pan}>
+          ✋
+        </button>
+        <button onClick={() => selectTool('measure')} className={dockBtn(tool === 'measure')} title={t.measure}>
+          📏
+        </button>
+        <button onClick={() => selectTool('walk')} className={dockBtn(tool === 'walk')} title={t.walk}>
+          🚶
+        </button>
+        <button onClick={() => selectTool('comment')} className={dockBtn(tool === 'comment')} title={t.comment}>
+          💬
+        </button>
       </div>
 
-      {/* Kontrol mode isolate + reset */}
-      <div className="absolute right-3 top-3 z-30 flex max-w-[75%] flex-wrap items-center justify-end gap-2">
+      {/* Hint tool aktif (atas-tengah). */}
+      <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded bg-black/40 px-2 py-1 text-xs text-white opacity-80 backdrop-blur">
+        {toolHint}
+      </div>
+
+      {/* Kontrol mode isolate + tampilan (kanan atas). */}
+      <div className="absolute right-3 top-3 z-30 flex max-w-[70%] flex-wrap items-center justify-end gap-2">
         <button
           onClick={toggleIsolate}
           className={`${btnBase} border border-white/20 backdrop-blur ${
@@ -550,6 +1015,7 @@ export default function ModelViewer({
           onClick={() => {
             resetIsolation();
             setSelected(null);
+            selectedMeshRef.current = null;
           }}
           className={`${btnBase} border border-white/20 bg-black/50 text-white backdrop-blur`}
         >
@@ -559,13 +1025,10 @@ export default function ModelViewer({
 
       {/* Panel section box: 6 slider (X/Y/Z, + & −). */}
       {sectionOn && (
-        <div className="absolute right-3 top-14 w-56 rounded border border-white/20 bg-black/60 p-3 text-white backdrop-blur">
+        <div className="absolute right-3 top-14 z-30 w-56 rounded border border-white/20 bg-black/60 p-3 text-white backdrop-blur">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs font-medium">{t.section}</span>
-            <button
-              onClick={resetSection}
-              className="text-[11px] opacity-70 hover:opacity-100"
-            >
+            <button onClick={resetSection} className="text-[11px] opacity-70 hover:opacity-100">
               {t.resetView}
             </button>
           </div>
@@ -587,9 +1050,7 @@ export default function ModelViewer({
                 max={1}
                 step={0.01}
                 value={clip[field]}
-                onChange={(e) =>
-                  setClip((c) => ({ ...c, [field]: parseFloat(e.target.value) }))
-                }
+                onChange={(e) => setClip((c) => ({ ...c, [field]: parseFloat(e.target.value) }))}
                 className="w-full accent-accent"
               />
             </label>
@@ -597,14 +1058,108 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Overlay status load: memuat / gagal (biar tidak blank tanpa info). */}
+      {/* Readout hasil ukur. */}
+      {tool === 'measure' && measureDist != null && (
+        <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded border border-white/20 bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur">
+          {t.measureResult}: <span className="font-semibold text-cyan-300">{measureDist.toFixed(2)} m</span>
+          <button onClick={clearMeasure} className="ml-3 opacity-70 underline hover:opacity-100">
+            {t.measureClear}
+          </button>
+        </div>
+      )}
+
+      {/* Label jarak melayang di titik tengah garis ukur. */}
+      <div
+        ref={measureLabelElRef}
+        className="pointer-events-none absolute left-0 top-0 z-20 rounded bg-cyan-500 px-1.5 py-0.5 text-[11px] font-semibold text-black"
+        style={{ display: 'none' }}
+      >
+        {measureDist != null ? `${measureDist.toFixed(2)} m` : ''}
+      </div>
+
+      {/* Marker komentar (pin), diproyeksikan tiap frame. */}
+      {comments
+        .filter((c) => c.pos_x != null)
+        .map((c) => (
+          <div
+            key={c.id}
+            ref={(el) => {
+              if (el) commentMarkerEls.current.set(c.id, el);
+              else commentMarkerEls.current.delete(c.id);
+            }}
+            className="absolute left-0 top-0 z-30"
+            style={{ display: 'none' }}
+          >
+            <button
+              onClick={() => setActiveCommentId((cur) => (cur === c.id ? null : c.id))}
+              className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-amber-500 text-xs shadow-lg"
+              title={c.body}
+            >
+              💬
+            </button>
+            {activeCommentId === c.id && (
+              <div className="absolute bottom-8 left-1/2 w-52 -translate-x-1/2 rounded border border-white/20 bg-black/85 p-2 text-xs text-white backdrop-blur">
+                <p className="whitespace-pre-wrap break-words">{c.body}</p>
+                <div className="mt-1 flex items-center justify-between text-[10px] opacity-60">
+                  <span>{c.author || '—'}</span>
+                  <span>{new Date(c.created_at).toLocaleDateString()}</span>
+                </div>
+                <button
+                  onClick={() => deleteComment(c.id)}
+                  className="mt-1 text-[10px] text-red-400 hover:text-red-300"
+                >
+                  {tc.delete}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+
+      {/* Form tambah komentar. */}
+      {pendingComment && (
+        <div className="absolute bottom-3 left-1/2 z-40 w-72 -translate-x-1/2 rounded border border-white/20 bg-black/85 p-3 text-white backdrop-blur">
+          <div className="mb-1 text-xs font-medium">{tc.add}</div>
+          <textarea
+            value={draftBody}
+            onChange={(e) => setDraftBody(e.target.value)}
+            placeholder={tc.placeholder}
+            rows={2}
+            autoFocus
+            className="mb-2 w-full resize-none rounded border border-white/15 bg-black/40 px-2 py-1 text-xs placeholder:text-white/40 focus:border-white/40 focus:outline-none"
+          />
+          <input
+            value={draftAuthor}
+            onChange={(e) => setDraftAuthor(e.target.value)}
+            placeholder={tc.author}
+            className="mb-2 w-full rounded border border-white/15 bg-black/40 px-2 py-1 text-xs placeholder:text-white/40 focus:border-white/40 focus:outline-none"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setPendingComment(null);
+                setDraftBody('');
+              }}
+              className={`${btnBase} border border-white/20 text-white`}
+            >
+              {tc.cancel}
+            </button>
+            <button
+              onClick={saveComment}
+              disabled={commentBusy || !draftBody.trim()}
+              className={`${btnBase} bg-accent text-black disabled:opacity-40`}
+            >
+              {commentBusy ? tc.saving : tc.save}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Overlay status load. */}
       {loadState !== 'ready' && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div
             className={`rounded px-4 py-2 text-sm ${
-              loadState === 'error'
-                ? 'bg-red-500/15 text-red-400'
-                : 'bg-black/50 text-white backdrop-blur'
+              loadState === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-black/50 text-white backdrop-blur'
             }`}
           >
             {loadState === 'error' ? t.loadError : t.loading}
@@ -612,22 +1167,43 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Info elemen terpilih */}
+      {/* Info elemen terpilih + ganti warna. */}
       {selected && (
-        <div className="absolute bottom-3 left-3 rounded bg-black/70 px-3 py-2 text-xs text-white">
+        <div className="absolute bottom-3 left-3 z-30 rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur">
           <div className="opacity-60">{t.selected}</div>
           <div className="font-medium">{selected.category ?? t.noCategory}</div>
-          <div className="opacity-50">{selected.globalId}</div>
+          <div className="mb-2 opacity-50">{selected.globalId}</div>
+          {selected.globalId !== '—' && (
+            <div className="flex items-center gap-1.5">
+              <span className="mr-1 opacity-60">{t.color}:</span>
+              {PAINT_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => applyColor(c)}
+                  aria-label={c}
+                  style={{ background: c }}
+                  className="h-4 w-4 rounded-full border border-white/40 hover:scale-110"
+                />
+              ))}
+              <button
+                onClick={resetColor}
+                className="ml-1 text-[10px] opacity-70 underline hover:opacity-100"
+                title={t.colorReset}
+              >
+                ↺
+              </button>
+            </div>
+          )}
         </div>
       )}
 
       {liveUpdateMessage && (
-        <div className="absolute bottom-3 right-3 rounded bg-black/70 px-3 py-1 text-xs text-white">
+        <div className="absolute bottom-3 right-3 z-30 rounded bg-black/70 px-3 py-1 text-xs text-white">
           {liveUpdateMessage}
         </div>
       )}
 
-      {/* Layer coret-coret (Metode A: canvas overlay screen space). */}
+      {/* Layer coret-coret (canvas overlay screen space). */}
       <MarkupOverlay
         active={markupOn}
         strings={locales[locale].markup}

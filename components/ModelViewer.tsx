@@ -74,6 +74,24 @@ export default function ModelViewer({
   const measureGroupRef = useRef<THREE.Group | null>(null);
   const measureLabelElRef = useRef<HTMLDivElement | null>(null);
 
+  // --- Section box interaktif ---
+  // Batas kotak dalam koordinat dunia (model sudah di-center ke origin).
+  // Disimpan di ref, bukan state: di-update tiap gerakan mouse saat drag,
+  // jadi tidak memicu re-render React tiap frame.
+  const sectionBoundsRef = useRef({ minX: -1, maxX: 1, minY: -1, maxY: 1, minZ: -1, maxZ: 1 });
+  const sectionGroupRef = useRef<THREE.Group | null>(null);
+  const sectionEdgesRef = useRef<THREE.LineSegments | null>(null);
+  const sectionHandlesRef = useRef<THREE.Mesh[]>([]);
+  // Handle yang sedang ditarik: sumbu + sisi (1 = sisi max, -1 = sisi min).
+  const sectionDragRef = useRef<{ axis: 'x' | 'y' | 'z'; side: 1 | -1 } | null>(null);
+  const sectionInfoElRef = useRef<HTMLDivElement | null>(null);
+  const sectionOnRef = useRef(false);
+  // Klik yang harus diabaikan karena barusan menarik handle section.
+  const suppressClickRef = useRef(false);
+  // Handler pointer dipasang sekali saat mount, jadi tidak melihat perubahan
+  // state biasa — pakai ref supaya status markup selalu terbaca terbaru.
+  const markupOnRef = useRef(false);
+
   // --- Walkthrough ---
   const walkingRef = useRef(false);
   const walkKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
@@ -93,7 +111,6 @@ export default function ModelViewer({
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [markupOn, setMarkupOn] = useState(false);
   const [sectionOn, setSectionOn] = useState(false);
-  const [clip, setClip] = useState({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
 
   const [tool, setToolState] = useState<Tool>('orbit');
   const [treeOpen, setTreeOpen] = useState(false);
@@ -228,6 +245,13 @@ export default function ModelViewer({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
+    // Isi `pointer` (koordinat NDC) dari posisi mouse di dalam container.
+    function setPointerFromEvent(event: MouseEvent | PointerEvent) {
+      const rect = container.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
     let downX = 0;
     let downY = 0;
     let moved = false;
@@ -235,22 +259,49 @@ export default function ModelViewer({
       downX = event.clientX;
       downY = event.clientY;
       moved = false;
+
+      // Handle section box punya prioritas di atas orbit & seleksi objek.
+      if (sectionOnRef.current && toolRef.current !== 'walk') {
+        setPointerFromEvent(event);
+        raycaster.setFromCamera(pointer, camera);
+        if (beginSectionDrag(raycaster)) {
+          renderer.domElement.setPointerCapture(event.pointerId);
+        }
+      }
     }
     function handlePointerMove(event: PointerEvent) {
       if (Math.abs(event.clientX - downX) > 4 || Math.abs(event.clientY - downY) > 4) {
         moved = true;
       }
+      if (sectionDragRef.current) {
+        setPointerFromEvent(event);
+        raycaster.setFromCamera(pointer, camera);
+        updateSectionDrag(raycaster);
+        return;
+      }
+      // Ubah kursor jadi "grab" saat menyentuh handle, biar kelihatan bisa ditarik.
+      if (sectionOnRef.current && !walkingRef.current) {
+        setPointerFromEvent(event);
+        raycaster.setFromCamera(pointer, camera);
+        const overHandle = raycaster.intersectObjects(sectionHandlesRef.current, false).length > 0;
+        renderer.domElement.style.cursor = overHandle ? 'grab' : '';
+      }
+    }
+    function handlePointerUp() {
+      endSectionDrag();
     }
 
     function handleClick(event: MouseEvent) {
       if (moved) return;
+      // Klik untuk menarik handle section — jangan ikut mengubah seleksi.
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
       const activeTool = toolRef.current;
       if (activeTool === 'walk') return;
 
-      const rect = container.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
+      setPointerFromEvent(event);
       raycaster.setFromCamera(pointer, camera);
       const root = modelRootRef.current;
       const intersects = raycaster.intersectObjects(root ? [root] : scene.children, true);
@@ -281,6 +332,8 @@ export default function ModelViewer({
     }
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
+    renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener('pointercancel', handlePointerUp);
     renderer.domElement.addEventListener('click', handleClick);
 
     // Pemetaan tombol gerak (sama untuk orbit & walkthrough):
@@ -409,6 +462,8 @@ export default function ModelViewer({
     return () => {
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+      renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+      renderer.domElement.removeEventListener('pointercancel', handlePointerUp);
       renderer.domElement.removeEventListener('click', handleClick);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
@@ -431,6 +486,8 @@ export default function ModelViewer({
     if (!camera || !container) return;
     const w = container.clientWidth;
     const h = container.clientHeight;
+
+    updateSectionGizmo();
 
     // Skala marker ukur supaya radiusnya ~7px di layar berapapun jaraknya.
     const group = measureGroupRef.current;
@@ -519,6 +576,9 @@ export default function ModelViewer({
         setHiddenCategories(new Set());
         setHiddenIds(new Set());
         buildTree();
+        // Ukuran model baru diketahui -> kotak section ikut menyesuaikan.
+        resetSectionBounds();
+        applySection();
         setLoadState('ready');
         dracoLoader.dispose();
       },
@@ -575,33 +635,225 @@ export default function ModelViewer({
     controls.update();
   }
 
-  function applyClipping() {
-    const renderer = rendererRef.current;
-    if (!renderer) return;
-    const s = modelSizeRef.current;
-    const hx = s.x / 2 || 1;
-    const hy = s.y / 2 || 1;
-    const hz = s.z / 2 || 1;
-    const [pXmax, pXmin, pYmax, pYmin, pZmax, pZmin] = clipPlanesRef.current;
-    pXmax.constant = hx * clip.xMax;
-    pXmin.constant = hx * clip.xMin;
-    pYmax.constant = hy * clip.yMax;
-    pYmin.constant = hy * clip.yMin;
-    pZmax.constant = hz * clip.zMax;
-    pZmin.constant = hz * clip.zMin;
-    renderer.clippingPlanes = sectionOn ? clipPlanesRef.current : [];
-  }
+  // --- Section box interaktif (gizmo 6 handle, gaya Navisworks) ---
 
-  useEffect(() => {
-    applyClipping();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionOn, clip, loadState]);
+  // Warna handle per sumbu, konvensi umum CAD: X merah, Y hijau, Z biru.
+  const AXIS_COLOR: Record<'x' | 'y' | 'z', number> = { x: 0xef4444, y: 0x22c55e, z: 0x3b82f6 };
+
+  // Kembalikan kotak ke ukuran penuh model.
+  function resetSectionBounds() {
+    const s = modelSizeRef.current;
+    sectionBoundsRef.current = {
+      minX: -s.x / 2,
+      maxX: s.x / 2,
+      minY: -s.y / 2,
+      maxY: s.y / 2,
+      minZ: -s.z / 2,
+      maxZ: s.z / 2,
+    };
+  }
 
   function resetSection() {
-    setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+    resetSectionBounds();
+    applySection();
+  }
+
+  // Bangun gizmo sekali: rangka kotak + 6 handle kubus kecil (satu per sisi).
+  function ensureSectionGizmo(): THREE.Group | null {
+    if (sectionGroupRef.current) return sectionGroupRef.current;
+    const scene = sceneRef.current;
+    if (!scene) return null;
+
+    const group = new THREE.Group();
+
+    const boxGeom = new THREE.BoxGeometry(1, 1, 1);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(boxGeom),
+      new THREE.LineBasicMaterial({ color: 0x22d3ee, depthTest: false, transparent: true, opacity: 0.9 })
+    );
+    edges.renderOrder = 998;
+    group.add(edges);
+    sectionEdgesRef.current = edges;
+    boxGeom.dispose();
+
+    const handles: THREE.Mesh[] = [];
+    (['x', 'y', 'z'] as const).forEach((axis) => {
+      ([1, -1] as const).forEach((side) => {
+        const h = new THREE.Mesh(
+          new THREE.BoxGeometry(1, 1, 1),
+          new THREE.MeshBasicMaterial({ color: AXIS_COLOR[axis], depthTest: false })
+        );
+        h.renderOrder = 999;
+        h.userData.axis = axis;
+        h.userData.side = side;
+        group.add(h);
+        handles.push(h);
+      });
+    });
+    sectionHandlesRef.current = handles;
+
+    scene.add(group);
+    sectionGroupRef.current = group;
+    return group;
+  }
+
+  // Terapkan batas kotak ke clipping planes renderer + tampilkan/sembunyikan
+  // gizmo. Dipanggil saat toggle, model selesai load, dan tiap gerakan drag.
+  function applySection() {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const b = sectionBoundsRef.current;
+    const [pXmax, pXmin, pYmax, pYmin, pZmax, pZmin] = clipPlanesRef.current;
+    // Bidang menyimpan sisi DALAM kotak: normal·p + constant > 0.
+    pXmax.constant = b.maxX; // normal (-1,0,0) -> x < maxX
+    pXmin.constant = -b.minX; // normal (1,0,0)  -> x > minX
+    pYmax.constant = b.maxY;
+    pYmin.constant = -b.minY;
+    pZmax.constant = b.maxZ;
+    pZmin.constant = -b.minZ;
+    renderer.clippingPlanes = sectionOnRef.current ? clipPlanesRef.current : [];
+
+    const group = sectionOnRef.current ? ensureSectionGizmo() : sectionGroupRef.current;
+    if (group) group.visible = sectionOnRef.current;
+  }
+
+  // Sinkronkan ref dengan state toggle, lalu terapkan.
+  useEffect(() => {
+    sectionOnRef.current = sectionOn;
+    applySection();
+    if (!sectionOn) {
+      endSectionDrag();
+      const canvas = rendererRef.current?.domElement;
+      if (canvas) canvas.style.cursor = ''; // buang kursor "grab" sisa hover handle
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionOn, loadState]);
+
+  // Posisi & skala gizmo dihitung tiap frame (dipanggil dari updateOverlays):
+  // rangka mengikuti batas kotak, handle dijaga berukuran tetap di layar dan
+  // digeser sedikit ke DALAM kotak supaya tidak ikut terpotong clipping.
+  function updateSectionGizmo() {
+    const group = sectionGroupRef.current;
+    const camera = cameraRef.current;
+    const container = containerRef.current;
+    if (!group || !group.visible || !camera || !container) return;
+
+    const b = sectionBoundsRef.current;
+    const cx = (b.minX + b.maxX) / 2;
+    const cy = (b.minY + b.maxY) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const sx = Math.max(b.maxX - b.minX, 1e-6);
+    const sy = Math.max(b.maxY - b.minY, 1e-6);
+    const sz = Math.max(b.maxZ - b.minZ, 1e-6);
+
+    const edges = sectionEdgesRef.current;
+    if (edges) {
+      edges.position.set(cx, cy, cz);
+      // Sedikit lebih kecil dari kotak: garis yang tepat di atas bidang potong
+      // akan ikut terbuang oleh clipping (uji > 0), jadi ditarik ke dalam.
+      edges.scale.set(sx * 0.999, sy * 0.999, sz * 0.999);
+    }
+
+    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+    const targetPx = 9;
+    const h = container.clientHeight || 1;
+
+    sectionHandlesRef.current.forEach((handle) => {
+      const axis = handle.userData.axis as 'x' | 'y' | 'z';
+      const side = handle.userData.side as 1 | -1;
+      const pos = new THREE.Vector3(cx, cy, cz);
+      if (axis === 'x') pos.x = side === 1 ? b.maxX : b.minX;
+      if (axis === 'y') pos.y = side === 1 ? b.maxY : b.minY;
+      if (axis === 'z') pos.z = side === 1 ? b.maxZ : b.minZ;
+
+      const dist = camera.position.distanceTo(pos);
+      const size = (targetPx * tanHalfFov * dist) / (h / 2);
+      handle.scale.setScalar(size * 2);
+      // Geser ke dalam kotak sebesar ukurannya supaya tidak terpotong.
+      pos[axis] -= side * size * 1.2;
+      handle.position.copy(pos);
+    });
+
+    const info = sectionInfoElRef.current;
+    if (info) info.textContent = `${sx.toFixed(1)} × ${sz.toFixed(1)} × ${sy.toFixed(1)} m`;
+  }
+
+  // Titik terdekat pada sebuah garis (sumbu) terhadap sinar mouse. Dipakai
+  // supaya handle bergerak persis mengikuti mouse sepanjang sumbunya saja.
+  function axisOffsetFromRay(
+    ray: THREE.Ray,
+    axisOrigin: THREE.Vector3,
+    axisDir: THREE.Vector3
+  ): number | null {
+    const w0 = axisOrigin.clone().sub(ray.origin);
+    const b = axisDir.dot(ray.direction);
+    const denom = 1 - b * b;
+    if (Math.abs(denom) < 1e-6) return null; // sumbu sejajar arah pandang
+    const d = axisDir.dot(w0);
+    const e = ray.direction.dot(w0);
+    return (b * e - d) / denom;
+  }
+
+  // Mulai drag kalau pointer mengenai salah satu handle. Return true bila kena.
+  function beginSectionDrag(raycaster: THREE.Raycaster): boolean {
+    if (!sectionOnRef.current) return false;
+    const handles = sectionHandlesRef.current;
+    if (!handles.length) return false;
+    const hits = raycaster.intersectObjects(handles, false);
+    if (!hits.length) return false;
+    const handle = hits[0].object;
+    sectionDragRef.current = {
+      axis: handle.userData.axis as 'x' | 'y' | 'z',
+      side: handle.userData.side as 1 | -1,
+    };
+    if (controlsRef.current) controlsRef.current.enabled = false;
+    suppressClickRef.current = true;
+    return true;
+  }
+
+  // Geser satu sisi kotak mengikuti mouse, dibatasi ukuran model & sisi lawan.
+  function updateSectionDrag(raycaster: THREE.Raycaster) {
+    const drag = sectionDragRef.current;
+    if (!drag) return;
+    const { axis, side } = drag;
+    const b = sectionBoundsRef.current;
+    const cx = (b.minX + b.maxX) / 2;
+    const cy = (b.minY + b.maxY) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+
+    const upper = axis === 'x' ? b.maxX : axis === 'y' ? b.maxY : b.maxZ;
+    const lower = axis === 'x' ? b.minX : axis === 'y' ? b.minY : b.minZ;
+    const facePos = side === 1 ? upper : lower;
+
+    const axisOrigin = new THREE.Vector3(cx, cy, cz);
+    axisOrigin[axis] = facePos;
+    const axisDir = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
+
+    const t = axisOffsetFromRay(raycaster.ray, axisOrigin, axisDir);
+    if (t === null) return;
+
+    const size = modelSizeRef.current;
+    const half = (axis === 'x' ? size.x : axis === 'y' ? size.y : size.z) / 2 || 1;
+    const gap = half * 0.02; // sisa ketebalan minimum supaya kotak tak terbalik
+    let value = facePos + t;
+    if (side === 1) value = Math.min(Math.max(value, lower + gap), half);
+    else value = Math.max(Math.min(value, upper - gap), -half);
+
+    if (axis === 'x') side === 1 ? (b.maxX = value) : (b.minX = value);
+    else if (axis === 'y') side === 1 ? (b.maxY = value) : (b.minY = value);
+    else side === 1 ? (b.maxZ = value) : (b.minZ = value);
+
+    applySection();
+  }
+
+  function endSectionDrag() {
+    if (!sectionDragRef.current) return;
+    sectionDragRef.current = null;
+    if (controlsRef.current) controlsRef.current.enabled = !markupOnRef.current && !walkingRef.current;
   }
 
   useEffect(() => {
+    markupOnRef.current = markupOn;
     if (controlsRef.current) controlsRef.current.enabled = !markupOn && !walkingRef.current;
   }, [markupOn]);
 
@@ -1015,38 +1267,18 @@ export default function ModelViewer({
         </button>
       </div>
 
-      {/* Panel section box: 6 slider (X/Y/Z, + & −). */}
+      {/* Panel section box: ukuran kotak + reset. Pemotongan diatur dengan
+          menarik handle berwarna langsung di 3D (X merah, Y hijau, Z biru). */}
       {sectionOn && (
         <div className="absolute right-3 top-14 z-30 w-56 rounded border border-white/20 bg-black/60 p-3 text-white backdrop-blur">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-1.5 flex items-center justify-between">
             <span className="text-xs font-medium">{t.section}</span>
             <button onClick={resetSection} className="text-[11px] opacity-70 hover:opacity-100">
               {t.resetView}
             </button>
           </div>
-          {(
-            [
-              ['xMax', 'X +'],
-              ['xMin', 'X −'],
-              ['yMax', 'Y +'],
-              ['yMin', 'Y −'],
-              ['zMax', 'Z +'],
-              ['zMin', 'Z −'],
-            ] as [keyof typeof clip, string][]
-          ).map(([field, label]) => (
-            <label key={field} className="mb-1.5 flex items-center gap-2 text-[11px]">
-              <span className="w-8 shrink-0 opacity-70">{label}</span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={clip[field]}
-                onChange={(e) => setClip((c) => ({ ...c, [field]: parseFloat(e.target.value) }))}
-                className="w-full accent-accent"
-              />
-            </label>
-          ))}
+          <div ref={sectionInfoElRef} className="mb-1.5 font-mono text-[11px] text-cyan-300" />
+          <p className="text-[11px] leading-snug opacity-60">{t.sectionHint}</p>
         </div>
       )}
 

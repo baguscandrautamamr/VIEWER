@@ -37,6 +37,7 @@ export default function MarkupOverlay({
   getViewerCanvas: () => HTMLCanvasElement | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const shapesRef = useRef<Shape[]>([]);
   const draftRef = useRef<Shape | null>(null);
   const drawingRef = useRef(false);
@@ -135,12 +136,31 @@ export default function MarkupOverlay({
     setEditValue('');
   }
 
+  // Fokuskan input SETELAH event pointer selesai. Tanpa delay, mousedown pada
+  // canvas mencuri fokus tepat setelah input muncul -> tak bisa mengetik.
+  useEffect(() => {
+    if (!editing) return;
+    const id = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [editing]);
+
+  // Kalau markup dimatikan atau ganti tool, simpan teks yang sedang diketik.
+  useEffect(() => {
+    if ((!active || tool !== 'text') && editing) commitText();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, tool]);
+
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     const { x, y } = posOf(e);
 
     if (tool === 'text') {
-      // Kalau sedang mengetik, klik di tempat lain = commit dulu (lewat onBlur),
-      // lalu buka editor baru di titik yang diklik.
+      // Klik di titik lain saat sedang mengetik = simpan teks lama dulu, lalu
+      // buka editor baru di titik yang diklik.
+      if (editing && editValue.trim()) {
+        shapesRef.current.push({ kind: 'text', color, x: editing.x, y: editing.y, text: editValue });
+        redraw();
+        bump();
+      }
       setEditing({ x, y });
       setEditValue('');
       return;
@@ -236,10 +256,11 @@ export default function MarkupOverlay({
           Enter = simpan, Esc = batal, klik di luar = simpan otomatis. */}
       {active && editing && (
         <input
-          autoFocus
+          ref={inputRef}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={(e) => {
+            e.stopPropagation();
             if (e.key === 'Enter') {
               e.preventDefault();
               commitText();
@@ -249,7 +270,6 @@ export default function MarkupOverlay({
               setEditValue('');
             }
           }}
-          onBlur={commitText}
           placeholder={strings.textPrompt}
           style={{
             position: 'absolute',
@@ -259,7 +279,7 @@ export default function MarkupOverlay({
             color,
             caretColor: color,
           }}
-          className="z-30 min-w-[8rem] border-b-2 bg-transparent px-0.5 outline-none placeholder:text-white/40"
+          className="z-30 min-w-[8rem] rounded border border-dashed border-current bg-white/70 px-1 outline-none placeholder:text-black/40 dark:bg-black/40 dark:placeholder:text-white/40"
         />
       )}
 

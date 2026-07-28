@@ -109,6 +109,7 @@ export default async function ManagePage({
 
       <ImportElements
         projectId={projectId}
+        savedCount={elementCount ?? 0}
         strings={{
           title: t.manage.importTitle,
           hint: t.manage.importHint,
@@ -118,6 +119,8 @@ export default async function ManagePage({
           done: t.manage.importDone,
           noElements: t.manage.importNoElements,
           pickFile: t.manage.importPickFile,
+          saved: t.manage.importSaved,
+          savedHint: t.manage.importSavedHint,
         }}
       />
 

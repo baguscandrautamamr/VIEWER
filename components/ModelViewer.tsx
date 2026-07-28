@@ -311,6 +311,46 @@ export default function ModelViewer({
     let downX = 0;
     let downY = 0;
     let moved = false;
+    // Drag "menoleh" dipasang di WINDOW, bukan di canvas. Tombol tengah rawan
+    // direbut browser (autoscroll) dan pointer capture canvas bisa dilepas
+    // OrbitControls saat pointerup-nya sendiri — dengan listener window,
+    // gerakan tetap terbaca sampai tombol benar-benar dilepas.
+    let lookListenersOn = false;
+    function startLookDrag(event: PointerEvent, freeLook: boolean) {
+      lookDragRef.current = { x: event.clientX, y: event.clientY, freeLook };
+      if (lookListenersOn) return;
+      window.addEventListener('pointermove', handleLookMove);
+      window.addEventListener('pointerup', handleLookEnd);
+      window.addEventListener('pointercancel', handleLookEnd);
+      lookListenersOn = true;
+    }
+    function handleLookMove(event: PointerEvent) {
+      const look = lookDragRef.current;
+      if (!look) return;
+      // Tombol sudah dilepas di luar jendela -> hentikan, jangan tersangkut.
+      if (event.buttons === 0) {
+        handleLookEnd();
+        return;
+      }
+      const dx = event.clientX - look.x;
+      const dy = event.clientY - look.y;
+      look.x = event.clientX;
+      look.y = event.clientY;
+      // Geser kanan -> menoleh kanan (putar searah jarum jam dilihat dari
+      // atas, jadi negatif terhadap sumbu Y). Geser atas (dy negatif) ->
+      // menengadah. Sumbu vertikal hanya untuk free look roda tengah.
+      const sens = look.freeLook ? LOOK_SENSITIVITY_SLOW : LOOK_SENSITIVITY;
+      lookAround(-dx * sens, look.freeLook ? -dy * sens : 0);
+    }
+    function handleLookEnd() {
+      lookDragRef.current = null;
+      if (!lookListenersOn) return;
+      window.removeEventListener('pointermove', handleLookMove);
+      window.removeEventListener('pointerup', handleLookEnd);
+      window.removeEventListener('pointercancel', handleLookEnd);
+      lookListenersOn = false;
+    }
+
     function handlePointerDown(event: PointerEvent) {
       downX = event.clientX;
       downY = event.clientY;
@@ -322,31 +362,22 @@ export default function ModelViewer({
       const shiftLook = event.shiftKey && event.button === 0;
       const wheelLook = lockOnRef.current && !event.shiftKey && event.button === 1;
       if ((shiftLook || wheelLook) && !walkingRef.current) {
-        // Cegah ikon autoscroll Windows saat tombol tengah ditekan.
         if (event.button === 1) event.preventDefault();
-        lookDragRef.current = { x: event.clientX, y: event.clientY, freeLook: wheelLook };
-        renderer.domElement.setPointerCapture(event.pointerId);
+        startLookDrag(event, wheelLook);
       }
     }
     function handlePointerMove(event: PointerEvent) {
       if (Math.abs(event.clientX - downX) > 4 || Math.abs(event.clientY - downY) > 4) {
         moved = true;
       }
-      const look = lookDragRef.current;
-      if (look) {
-        const dx = event.clientX - look.x;
-        const dy = event.clientY - look.y;
-        look.x = event.clientX;
-        look.y = event.clientY;
-        // Geser kanan -> menoleh kanan (putar searah jarum jam dilihat dari
-        // atas, jadi negatif terhadap sumbu Y). Geser atas (dy negatif) ->
-        // menengadah. Sumbu vertikal hanya untuk free look roda tengah.
-        const sens = look.freeLook ? LOOK_SENSITIVITY_SLOW : LOOK_SENSITIVITY;
-        lookAround(-dx * sens, look.freeLook ? -dy * sens : 0);
-      }
     }
-    function handlePointerUp() {
-      lookDragRef.current = null;
+    // Autoscroll (ikon panah 4 arah) di Chrome/Firefox dipicu oleh mousedown
+    // tombol tengah; kalau muncul, ia merebut gerakan mouse berikutnya.
+    function handleNativeMouseDown(event: MouseEvent) {
+      if (event.button === 1) event.preventDefault();
+    }
+    function handleAuxClick(event: MouseEvent) {
+      if (event.button === 1) event.preventDefault();
     }
 
     // Shift + scroll = menengadah / menunduk. Zoom sudah dimatikan selama Shift
@@ -417,8 +448,8 @@ export default function ModelViewer({
     }
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
-    renderer.domElement.addEventListener('pointerup', handlePointerUp);
-    renderer.domElement.addEventListener('pointercancel', handlePointerUp);
+    renderer.domElement.addEventListener('mousedown', handleNativeMouseDown);
+    renderer.domElement.addEventListener('auxclick', handleAuxClick);
     renderer.domElement.addEventListener('wheel', handleWheel, { passive: false });
     renderer.domElement.addEventListener('click', handleClick);
     window.addEventListener('keydown', handleShift);
@@ -555,10 +586,11 @@ export default function ModelViewer({
     });
 
     return () => {
+      handleLookEnd(); // lepas listener window kalau masih ada drag berjalan
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
-      renderer.domElement.removeEventListener('pointerup', handlePointerUp);
-      renderer.domElement.removeEventListener('pointercancel', handlePointerUp);
+      renderer.domElement.removeEventListener('mousedown', handleNativeMouseDown);
+      renderer.domElement.removeEventListener('auxclick', handleAuxClick);
       renderer.domElement.removeEventListener('wheel', handleWheel);
       renderer.domElement.removeEventListener('click', handleClick);
       window.removeEventListener('keydown', handleShift);

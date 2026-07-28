@@ -33,8 +33,8 @@ export const locales = {
       navKeys: 'Keyboard: W/S maju-mundur · A/D kiri-kanan · Q naik · E turun',
       speed: 'Kecepatan',
       lock: 'Diam',
-      lockHint: 'Kunci putaran — klik kiri tidak memutar model. Putar tetap bisa dengan Shift + roda tengah.',
-      lockOnHint: 'Mode diam — model dikunci, putar pakai Shift + roda tengah',
+      lockHint: 'Kunci putaran — klik kiri tidak memutar model. Tahan roda tengah + geser untuk melihat sekeliling, Shift + roda tengah untuk memutar.',
+      lockOnHint: 'Mode diam — tahan roda tengah & geser untuk lihat sekeliling',
       shiftKeys: 'Shift: roda tengah = putar · scroll = lihat atas/bawah · klik kiri geser = lihat kiri/kanan',
     },
     tree: {
@@ -142,8 +142,8 @@ export const locales = {
       navKeys: 'Keyboard: W/S move · A/D left-right · Q up · E down',
       speed: 'Speed',
       lock: 'Static',
-      lockHint: 'Lock rotation — left click no longer rotates the model. Shift + middle wheel still rotates.',
-      lockOnHint: 'Static mode — model locked, rotate with Shift + middle wheel',
+      lockHint: 'Lock rotation — left click no longer rotates the model. Hold the middle wheel and drag to look around; Shift + middle wheel rotates.',
+      lockOnHint: 'Static mode — hold the middle wheel and drag to look around',
       shiftKeys: 'Shift: middle wheel = rotate · scroll = look up/down · left drag = look left/right',
     },
     tree: {

@@ -93,7 +93,8 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 - **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
   titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
   kamera digerakkan.
-- **Ganti Warna** — pilih elemen lalu pilih warna di kotak info (kiri bawah).
+- **Layar penuh (⛶)** — perbesar viewer ke seluruh layar; dock & panel ikut
+  tampil. Tekan lagi atau `Esc` untuk keluar.
 - **Diam** — kunci putaran supaya model tidak berputar tak sengaja saat
   presentasi. Klik kiri berhenti memutar (seleksi elemen tetap jalan), inersia
   dimatikan sehingga berhenti seketika. Sebagai gantinya **tahan klik kiri +

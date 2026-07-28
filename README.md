@@ -60,7 +60,7 @@ npm start        # jalankan hasil build
 | Klik kiri + geser | Putar model (orbit) |
 | Klik kiri (tanpa geser) | Pilih & isolate elemen |
 | Scroll | Zoom |
-| **Roda tengah + geser** (mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
+| **Klik kiri + geser** (mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
 | **Shift + roda tengah + geser** | Putar model (orbit) |
 | **Shift + scroll** | Pandangan kamera atas/bawah |
 | **Shift + klik kiri + geser** | Pandangan kamera kiri/kanan |
@@ -88,10 +88,10 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 - **Ganti Warna** — pilih elemen lalu pilih warna di kotak info (kiri bawah).
 - **Diam** — kunci putaran supaya model tidak berputar tak sengaja saat
   presentasi. Klik kiri berhenti memutar (seleksi elemen tetap jalan), inersia
-  dimatikan sehingga berhenti seketika. Sebagai gantinya **tahan roda tengah +
-  geser** untuk melihat sekeliling secara perlahan (kiri/kanan & atas/bawah).
-  Zoom lewat scroll, geser, dan keyboard tetap berfungsi; memutar model tetap
-  bisa lewat **Shift + roda tengah**.
+  dimatikan sehingga berhenti seketika. Sebagai gantinya **tahan klik kiri +
+  geser** untuk melihat sekeliling secara perlahan (kiri/kanan & atas/bawah);
+  klik tanpa geser tetap memilih/isolate elemen. Zoom, geser, dan keyboard
+  tetap berfungsi; memutar model tetap bisa lewat **Shift + roda tengah**.
 - Ditambah fitur lama: Isolate (objek/kategori), Section box (6 slider),
   Coret markup, Fokus, auto-update saat model di-push.
 

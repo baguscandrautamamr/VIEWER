@@ -152,14 +152,8 @@ export default function ModelViewer({
           ? null // mode Diam: klik kiri tidak memutar model
           : THREE.MOUSE.ROTATE;
 
-    // Shift + roda tengah = orbit. Tanpa Shift: di mode Diam roda tengah
-    // dipakai untuk menoleh bebas (ditangani manual, jadi dilepas dari
-    // OrbitControls); di luar mode Diam tetap zoom seperti biasa.
-    controls.mouseButtons.MIDDLE = shift
-      ? THREE.MOUSE.ROTATE
-      : lockOnRef.current
-        ? null
-        : THREE.MOUSE.DOLLY;
+    // Shift + roda tengah = orbit; tanpa Shift roda tengah tetap zoom.
+    controls.mouseButtons.MIDDLE = shift ? THREE.MOUSE.ROTATE : THREE.MOUSE.DOLLY;
     // Saat Shift ditahan, scroll dipakai untuk menengadah/menunduk, bukan zoom.
     controls.enableZoom = !shift;
     controls.enableDamping = !lockOnRef.current;
@@ -355,16 +349,15 @@ export default function ModelViewer({
       downX = event.clientX;
       downY = event.clientY;
       moved = false;
-      // Dua cara menoleh, keduanya sudah dilepas dari OrbitControls lewat
-      // updateMouseButtons() supaya tidak bentrok:
-      //   - Shift + klik kiri  -> kiri/kanan saja
-      //   - roda tengah (mode Diam) -> bebas kiri/kanan + atas/bawah, pelan
-      const shiftLook = event.shiftKey && event.button === 0;
-      const wheelLook = lockOnRef.current && !event.shiftKey && event.button === 1;
-      if ((shiftLook || wheelLook) && !walkingRef.current) {
-        if (event.button === 1) event.preventDefault();
-        startLookDrag(event, wheelLook);
-      }
+      // Dua cara menoleh dengan klik kiri, keduanya sudah dilepas dari
+      // OrbitControls lewat updateMouseButtons() supaya tidak bentrok:
+      //   - Shift + klik kiri        -> kiri/kanan saja
+      //   - klik kiri di mode Diam   -> bebas kiri/kanan + atas/bawah, pelan
+      // Tool Geser (pan) dikecualikan: di sana klik kiri memang untuk menggeser.
+      if (event.button !== 0 || walkingRef.current) return;
+      const shiftLook = event.shiftKey;
+      const lockLook = lockOnRef.current && !event.shiftKey && toolRef.current !== 'pan';
+      if (shiftLook || lockLook) startLookDrag(event, lockLook);
     }
     function handlePointerMove(event: PointerEvent) {
       if (Math.abs(event.clientX - downX) > 4 || Math.abs(event.clientY - downY) > 4) {

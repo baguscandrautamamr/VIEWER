@@ -85,6 +85,10 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Fix: nama elemen hilang pada model besar.** Query `elements` di viewer
+  belum dipaginasi, jadi dari 22.317 baris hanya ~1000 pertama yang terbaca —
+  elemen di bagian belakang file IFC (mis. elektrikal) tetap tampil sebagai
+  GlobalId. Sekarang dipaginasi
 - **Tombol "Impor nama elemen dari IFC"** di halaman Kelola — alternatif tanpa
   Command Prompt. File IFC dibaca bertahap di browser (tidak di-upload), yang
   dikirim ke `/api/elements` cuma daftar `{guid, category, name}` per batch
@@ -233,7 +237,22 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     error, cuma jumlahnya kurang). Pembatasnya **baris baru**, bukan `;`,
     karena `;` bisa muncul di dalam nama seperti `"Ruang; Kantor"`.
 
-16. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+16. **Query Supabase ke tabel besar WAJIB paginasi.** PostgREST/Supabase
+    membatasi jumlah baris per permintaan (bawaannya **1000**) dan **tidak
+    memberi error** kalau datanya lebih banyak — sisanya hilang diam-diam.
+    Gejalanya menipu: tabel `elements` terisi 22.317 baris, halaman Kelola
+    melaporkan angka itu dengan benar, tapi di viewer sebagian besar elemen
+    tetap tampil sebagai GlobalId di kategori "Default" — karena browser cuma
+    menerima 1000 baris pertama (= elemen di awal file IFC, biasanya
+    arsitektur; elektrikal ada di belakang).
+
+    Pola paginasi yang aman: maju sebanyak baris yang **benar-benar diterima**
+    (`from += data.length`), berhenti saat satu halaman mengembalikan 0 baris.
+    Jangan maju sebesar ukuran halaman dan jangan berhenti saat halaman lebih
+    pendek dari yang diminta — batas server bisa lebih kecil dari yang kita
+    minta. Lihat pemuatan `elements` di `ModelViewer.tsx`.
+
+17. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

@@ -93,6 +93,21 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Fix: klik kolom malah kena "hantu" tanpa kategori.** Sinar pemilihan tidak
+  peduli material, jadi elemen tembus pandang (volume ruang/kaca) yang di layar
+  nyaris tak terlihat tetap tertembus lebih dulu dan memakan klik yang
+  diarahkan ke kolom di belakangnya. Sekarang objek **padat diutamakan**, objek
+  tembus pandang (opacity < 0.35) ditaruh paling belakang, dan yang benar-benar
+  tak terlihat (opacity ~0) tidak bisa diklik sama sekali. Bobotnya dihitung
+  dari material ASLI, bukan material saat itu — isolate menggantinya dengan
+  material redup yang transparan
+- **Parser IFC: grid/ruang/bukaan/anotasi tidak lagi dibuang**, tapi dicatat
+  dengan kategori dipaksa `IFCGRID`/`IFCSPACE`/`IFCOPENINGELEMENT`/
+  `IFCANNOTATION` (bukan dari nama family — nama grid isinya cuma "A"/"1", bisa
+  jadi puluhan kategori sampah). Dulu dibuang total, akibatnya "hantu" ini
+  tampil "Tanpa kategori" tanpa nama: tidak bisa dikenali, tidak bisa
+  dimatikan. Viewer memperlakukan kategori itu sama seperti objek tembus
+  pandang saat memilih. **Perlu impor ulang IFC** supaya berlaku
 - **Shift + klik = tembus objek yang bertumpuk.** Objek yang diincar sering
   terhalang elemen lain (mis. elemen besar tak terlihat yang menutupi kolom).
   Shift + klik di titik yang sama memajukan pilihan ke objek berikutnya di

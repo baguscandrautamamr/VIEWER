@@ -169,6 +169,9 @@ export default function ModelViewer({
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [measureDist, setMeasureDist] = useState<number | null>(null);
+  // Selisih per sumbu dalam konvensi Revit/IFC (z = tinggi), diisi setelah
+  // titik kedua diklik.
+  const [measureDelta, setMeasureDelta] = useState<{ x: number; y: number; z: number } | null>(null);
   const [walking, setWalking] = useState(false);
   const [speedMult, setSpeedMult] = useState(1);
   const [speedOpen, setSpeedOpen] = useState(false);
@@ -1241,9 +1244,19 @@ export default function ModelViewer({
       );
       line.renderOrder = 999;
       g.add(line);
-      setMeasureDist(measurePtsRef.current[0].distanceTo(measurePtsRef.current[1]));
+      const [a, b] = measurePtsRef.current;
+      setMeasureDist(a.distanceTo(b));
+      // Selisih per sumbu, dipetakan ke konvensi Revit/IFC (Z = tinggi).
+      // GLB hasil IfcConvert Y-up, IFC Z-up: sumbu vertikal scene (y) adalah
+      // Z bagi user. Tandanya tidak dipakai, jadi urusan Y vs −Y tidak masalah.
+      setMeasureDelta({
+        x: Math.abs(b.x - a.x),
+        y: Math.abs(b.z - a.z),
+        z: Math.abs(b.y - a.y),
+      });
     } else {
       setMeasureDist(null);
+      setMeasureDelta(null);
     }
   }
 
@@ -1261,6 +1274,7 @@ export default function ModelViewer({
     }
     measurePtsRef.current = [];
     setMeasureDist(null);
+    setMeasureDelta(null);
   }
 
   // --- Selection Tree callbacks ---
@@ -1644,10 +1658,36 @@ export default function ModelViewer({
           hanya saat tool measure aktif) selama masih ada hasil. */}
       {measureDist != null && (
         <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded border border-white/20 bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur">
-          {t.measureResult}: <span className="font-semibold text-cyan-300">{measureDist.toFixed(2)} m</span>
-          <button onClick={clearMeasure} className="ml-3 opacity-70 underline hover:opacity-100">
-            {t.measureClear}
-          </button>
+          <div className="flex items-center justify-center">
+            <span>
+              {t.measureResult}:{' '}
+              <span className="font-semibold text-cyan-300">{measureDist.toFixed(2)} m</span>
+            </span>
+            <button onClick={clearMeasure} className="ml-3 opacity-70 underline hover:opacity-100">
+              {t.measureClear}
+            </button>
+          </div>
+          {/* Selisih per sumbu — muncul begitu titik kedua diklik. */}
+          {measureDelta && (
+            <div
+              className="mt-1 flex items-center justify-center gap-3 border-t border-white/15 pt-1 text-[11px]"
+              title={t.measureAxisHint}
+            >
+              {(
+                [
+                  ['X', measureDelta.x],
+                  ['Y', measureDelta.y],
+                  ['Z', measureDelta.z],
+                ] as [string, number][]
+              ).map(([axis, v]) => (
+                <span key={axis}>
+                  <span className="opacity-50">{axis}</span>{' '}
+                  <span className="font-semibold text-cyan-300">{v.toFixed(2)}</span>
+                </span>
+              ))}
+              <span className="opacity-50">m</span>
+            </div>
+          )}
         </div>
       )}
 

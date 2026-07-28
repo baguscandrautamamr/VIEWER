@@ -88,6 +88,9 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Ukur menampilkan selisih X / Y / Z** setelah titik kedua diklik, di bawah
+  angka jarak. Dipetakan ke konvensi Revit (Z = tinggi), bukan sumbu mentah
+  Three.js — GLB hasil IfcConvert itu Y-up sedangkan IFC/Revit Z-up
 - **Aksi ke objek terpilih, auto-fokus, & Kosongkan.** Tiga permintaan sekaligus:
   (1) kotak "Selected" dapat palet warna + tombol Sembunyikan objek, dan ikut
   bergeser saat panel Struktur dibuka (sebelumnya tertutup panel);
@@ -305,7 +308,15 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     ikut bergeser (`left: treeOpen ? '17rem' : '0.75rem'`, sama seperti dock),
     kalau tidak dia tertutup panel saat panel dibuka.
 
-23. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+23. **Sumbu Three.js ≠ sumbu Revit. Y-up vs Z-up.** glTF/GLB wajib Y-up, jadi
+    IfcConvert memutar model saat convert: yang di Revit sumbu **Z (tinggi)**
+    menjadi **y** di scene, dan Y mendatar Revit menjadi **z**. Selisih sumbu di
+    tool Ukur karena itu dipetakan `X = |dx|`, `Y = |dz|`, `Z = |dy|` — kalau
+    dipakai apa adanya, "Z" yang tampil justru jarak mendatar dan angkanya
+    membingungkan orang yang terbiasa Revit. Tandanya dibuang (nilai mutlak),
+    jadi arah putaran Y vs −Y tidak perlu dipusingkan.
+
+24. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

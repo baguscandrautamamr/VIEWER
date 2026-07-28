@@ -113,6 +113,9 @@ export const locales = {
       sheetList: 'Sheet',
       sheetHint: 'Centang sheet yang mau ditampilkan ke client.',
       sheetEmpty: 'Belum ada sheet. Sync sheet dari add-in Revit dulu.',
+      elementsMissing: 'Nama & kategori elemen belum diimpor',
+      elementsMissingHint:
+        'Di viewer, semua objek akan tampil sebagai kode acak dan masuk kategori "Default". Jalankan command ini sekali dengan file IFC-nya (model GLB yang sudah di-upload tidak perlu diganti):',
     },
     ui: { lang: 'EN', theme: 'Tema', language: 'Bahasa' },
   },
@@ -230,6 +233,9 @@ export const locales = {
       sheetList: 'Sheets',
       sheetHint: 'Check the sheets you want to show to the client.',
       sheetEmpty: 'No sheets yet. Sync sheets from the Revit add-in first.',
+      elementsMissing: 'Element names & categories not imported yet',
+      elementsMissingHint:
+        'In the viewer every object will show as a random code and fall under the "Default" category. Run this once with the IFC file (the uploaded GLB does not need replacing):',
     },
     ui: { lang: 'ID', theme: 'Theme', language: 'Language' },
   },

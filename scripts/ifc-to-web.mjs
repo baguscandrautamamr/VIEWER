@@ -2,19 +2,32 @@
 // siap di-upload manual lewat website (halaman Kelola).
 //
 // Alur:  IFC --(IfcConvert)--> GLB --(Draco)--> GLB kecil siap upload
+//                           \--(parse nama family)--> tabel `elements`
 //
-// Bedanya dengan push-model.mjs: script ini TIDAK upload ke Supabase. Cuma
-// menghasilkan file GLB terkompresi di komputermu, lalu kamu upload sendiri
-// di halaman Kelola (Upload model GLB). Cocok untuk alur manual + Google Drive.
+// Bedanya dengan push-model.mjs: script ini TIDAK meng-upload GLB-nya (file
+// tetap di komputermu untuk di-upload manual lewat halaman Kelola / Google
+// Drive). Yang dikirim ke Supabase cuma daftar nama & kategori elemen —
+// ukurannya kecil, dan tanpa itu viewer tidak bisa tahu nama tiap objek.
+//
+// KENAPA PERLU: IfcConvert dijalankan dengan --use-element-guids, jadi objek
+// di GLB dinamai GlobalId (kode 22 karakter), bukan nama aslinya. Nama &
+// kategori hidup di tabel `elements`. Kalau tabel itu kosong, semua elemen
+// tampil sebagai kode acak dan masuk kategori "Default".
 //
 // Pemakaian:
-//   node scripts/ifc-to-web.mjs <file.ifc> [output.glb]
+//   node scripts/ifc-to-web.mjs <file.ifc> [project_id] [output.glb]
+//
+// `project_id` OPSIONAL. Kalau diisi, nama & kategori elemen langsung dikirim
+// ke Supabase (tidak perlu paste SQL manual). Kalau dikosongkan, script jalan
+// seperti sebelumnya — cuma convert + kompresi.
 //
 // Kalau output tidak diisi, hasil ditulis ke "<nama-ifc>-web.glb" di folder
 // yang sama dengan file IFC-nya.
 //
-// Konfigurasi (dari .env.local, opsional):
-//   IFCCONVERT_PATH  - path ke IfcConvert (default: "IfcConvert" di PATH)
+// Konfigurasi (dari .env.local):
+//   IFCCONVERT_PATH            - path ke IfcConvert (default: "IfcConvert" di PATH)
+//   NEXT_PUBLIC_SUPABASE_URL   - wajib kalau project_id diisi
+//   SUPABASE_SERVICE_ROLE_KEY  - wajib kalau project_id diisi (rahasia)
 //
 // File besar butuh RAM. Kalau kena "heap out of memory", jalankan dengan:
 //   node --max-old-space-size=8192 scripts/ifc-to-web.mjs <file.ifc>
@@ -24,6 +37,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { compressGlb, fmtMB } from './lib/compress-glb.mjs';
+import { parseIfcElements, summarize } from './lib/ifc-elements.mjs';
+import { upsertElements } from './lib/push-elements.mjs';
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -48,20 +63,39 @@ function die(msg) {
 }
 
 const env = loadEnvLocal();
-const [, , ifcPath, outputArg] = process.argv;
+const [, , ifcPath, ...restArgs] = process.argv;
 
 if (!ifcPath) {
-  die('Pemakaian: node scripts/ifc-to-web.mjs <file.ifc> [output.glb]');
+  die('Pemakaian: node scripts/ifc-to-web.mjs <file.ifc> [project_id] [output.glb]');
 }
 if (!fs.existsSync(ifcPath)) die(`File IFC tidak ditemukan: ${ifcPath}`);
 
+// Argumen sisanya dibedakan dari bentuknya, bukan urutannya — supaya pemakaian
+// lama (`ifc-to-web.mjs model.ifc keluaran.glb`) tetap jalan apa adanya.
+const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+const projectId = restArgs.find(isUuid) || null;
+const outputArg = restArgs.find((a) => !isUuid(a)) || null;
+
 const IFCCONVERT = env.IFCCONVERT_PATH || 'IfcConvert';
+const SUPABASE_URL = (env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '');
+const SERVICE_KEY = env.SUPABASE_SERVICE_ROLE_KEY;
 const outputPath =
   outputArg || path.join(path.dirname(ifcPath), path.basename(ifcPath).replace(/\.ifc$/i, '') + '-web.glb');
 
+// Gagal cepat kalau project_id diisi tapi kredensial belum ada — lebih baik
+// tahu sekarang daripada setelah menunggu convert model besar selesai.
+if (projectId && (!SUPABASE_URL || !SERVICE_KEY)) {
+  die(
+    'project_id diisi, tapi NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY\n' +
+      '   belum ada di .env.local. Isi dulu, atau jalankan tanpa project_id.'
+  );
+}
+
 async function main() {
+  const steps = projectId ? 3 : 2;
+
   // 1) Convert IFC -> GLB (temp)
-  console.error(`▶ [1/2] Convert IFC -> GLB (${IFCCONVERT}) ...`);
+  console.error(`▶ [1/${steps}] Convert IFC -> GLB (${IFCCONVERT}) ...`);
   const tmpGlb = path.join(os.tmpdir(), `ifc2web-${Date.now()}.glb`);
   try {
     execFileSync(IFCCONVERT, ['-y', '--use-element-guids', ifcPath, tmpGlb], { stdio: 'inherit' });
@@ -71,7 +105,7 @@ async function main() {
   if (!fs.existsSync(tmpGlb)) die('GLB tidak terbentuk — cek output IfcConvert di atas.');
 
   // 2) Kompresi Draco -> file akhir
-  console.error('▶ [2/2] Kompresi Draco ...');
+  console.error(`▶ [2/${steps}] Kompresi Draco ...`);
   try {
     const { before, after } = await compressGlb(tmpGlb, outputPath);
     const pct = Math.round((1 - after / before) * 100);
@@ -83,8 +117,36 @@ async function main() {
 
   fs.unlinkSync(tmpGlb);
 
+  // 3) Kirim nama & kategori elemen ke Supabase (kalau project_id diisi).
+  if (projectId) {
+    console.error(`▶ [3/${steps}] Kirim nama & kategori elemen ke Supabase ...`);
+    const rows = parseIfcElements(fs.readFileSync(ifcPath, 'utf8'));
+    if (rows.length === 0) {
+      console.error('  ⚠ Tidak ada elemen ber-GlobalId terbaca — tabel elements dilewati.');
+    } else {
+      await upsertElements({
+        supabaseUrl: SUPABASE_URL,
+        serviceKey: SERVICE_KEY,
+        projectId,
+        rows,
+      });
+      const cats = summarize(rows);
+      console.error(`  ${rows.length} elemen, ${cats.length} kategori tersimpan.`);
+      cats.slice(0, 8).forEach(([c, n]) => console.error(`    ${n}\t${c}`));
+      if (cats.length > 8) console.error(`    … dan ${cats.length - 8} kategori lain`);
+    }
+  }
+
   console.error(`\n✅ Selesai: ${outputPath}`);
-  console.error('   Upload file ini di halaman Kelola (Upload model GLB).\n');
+  console.error('   Upload file ini di halaman Kelola (Upload model GLB).');
+  if (!projectId) {
+    console.error(
+      '\n   ⚠ Tanpa project_id, nama & kategori elemen TIDAK dikirim — di viewer\n' +
+        '     semua objek akan tampil sebagai kode acak dan masuk kategori "Default".\n' +
+        '     Jalankan ulang dengan: node scripts/ifc-to-web.mjs <file.ifc> <project_id>'
+    );
+  }
+  console.error('');
 }
 
 main().catch((e) => die(e.message));

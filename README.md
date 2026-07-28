@@ -142,12 +142,22 @@ Model IFC besar sering menghasilkan GLB ratusan MB yang berat di-load di web.
 **Paling praktis — 1 command dari IFC langsung jadi GLB kecil siap upload:**
 
 ```bash
-node scripts/ifc-to-web.mjs <file.ifc> [output.glb]
+node scripts/ifc-to-web.mjs <file.ifc> <project_id>
 ```
 
-Ini menjalankan IfcConvert (IFC→GLB) lalu kompres Draco sekaligus. Hasilnya
-`<nama-ifc>-web.glb` — tinggal upload di halaman Kelola (Upload model GLB).
+Ini menjalankan IfcConvert (IFC→GLB), kompres Draco, **dan mengirim nama +
+kategori tiap elemen ke tabel `elements`**. Hasilnya `<nama-ifc>-web.glb` —
+tinggal upload di halaman Kelola (Upload model GLB).
 Butuh `IFCCONVERT_PATH` di `.env.local` (atau `IfcConvert` ada di PATH).
+
+> **`project_id` penting.** IfcConvert dijalankan dengan `--use-element-guids`,
+> jadi objek di GLB dinamai GlobalId (kode 22 karakter) — nama & kategori yang
+> bisa dibaca manusia hanya ada di tabel `elements`. Tanpa `project_id`, semua
+> elemen di viewer tampil sebagai kode acak dan masuk kategori "Default".
+> Halaman Kelola akan menampilkan peringatan kalau tabel ini masih kosong.
+>
+> Untuk model yang sudah terlanjur di-upload, tidak perlu convert ulang —
+> jalankan command ini sekali dengan file IFC-nya, GLB-nya tidak berubah.
 
 **Kalau GLB-nya sudah ada** (convert sendiri via Blender / converter online),
 tinggal kompres saja sebelum upload:

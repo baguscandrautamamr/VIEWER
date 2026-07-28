@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseIfcElements, summarize } from './lib/ifc-elements.mjs';
+import { upsertElements } from './lib/push-elements.mjs';
 
 function loadEnvLocal() {
   const env = { ...process.env };
@@ -138,22 +139,14 @@ async function main() {
   });
   const versionId = (await mvRes.json())[0]?.id;
 
-  // 6) Upsert elements (kategori per objek) secara chunk
-  const CHUNK = 500;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const body = rows.slice(i, i + CHUNK).map((r) => ({
-      project_id: projectId,
-      global_id: r.guid,
-      category: r.category,
-      name: r.name,
-      last_updated_version_id: versionId,
-    }));
-    await rest(`/rest/v1/elements?on_conflict=project_id,global_id`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(body),
-    });
-  }
+  // 6) Upsert elements (kategori + nama per objek)
+  await upsertElements({
+    supabaseUrl: SUPABASE_URL,
+    serviceKey: SERVICE_KEY,
+    projectId,
+    rows,
+    versionId,
+  });
 
   // 7) Ambil token buat cetak link presentasi
   let presentHint = `/present/${projectId}?t=<token>`;

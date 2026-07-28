@@ -34,6 +34,18 @@ const PAINT_COLORS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#3b82f6', '#a
 const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
 const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
 
+// Intensitas dasar tiap lampu pada kecerahan 1×. Slider mengalikan nilai ini.
+const BASE_LIGHT = { ambient: 1.0, hemi: 0.9, key: 1.1, fill: 0.45 };
+// Warna latar viewer per pilihan. `null` = ikut tema halaman (transparan).
+const BG_COLORS: Record<string, number | null> = {
+  theme: null,
+  light: 0xf5f6f7,
+  white: 0xffffff,
+  dark: 0x1e2126,
+};
+type BgMode = keyof typeof BG_COLORS;
+const DISPLAY_PREFS_KEY = 'rwv_display';
+
 export default function ModelViewer({
   projectId,
   initialGlbUrl,
@@ -102,6 +114,16 @@ export default function ModelViewer({
   // bawah, pelan); selain itu Shift + klik kiri (kiri/kanan saja).
   const lookDragRef = useRef<{ x: number; y: number; freeLook: boolean } | null>(null);
 
+  // --- Tampilan (kecerahan & latar) ---
+  const lightsRef = useRef<{
+    ambient: THREE.AmbientLight;
+    hemi: THREE.HemisphereLight;
+    key: THREE.DirectionalLight;
+    fill: THREE.DirectionalLight;
+  } | null>(null);
+  const brightnessRef = useRef(1);
+  const bgModeRef = useRef<BgMode>('theme');
+
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
   const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
@@ -121,6 +143,10 @@ export default function ModelViewer({
   const [speedMult, setSpeedMult] = useState(1);
   const [speedOpen, setSpeedOpen] = useState(false);
   const [lockOn, setLockOn] = useState(false);
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const [brightness, setBrightness] = useState(1);
+  const [bgMode, setBgMode] = useState<BgMode>('theme');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
@@ -158,6 +184,69 @@ export default function ModelViewer({
     controls.enableZoom = !shift;
     controls.enableDamping = !lockOnRef.current;
   }
+
+  // Terapkan kecerahan & warna latar ke scene. Dibaca dari ref supaya bisa
+  // dipanggil dari dalam efek mount (yang tidak melihat perubahan state).
+  function applyDisplay() {
+    const lights = lightsRef.current;
+    const b = brightnessRef.current;
+    if (lights) {
+      lights.ambient.intensity = BASE_LIGHT.ambient * b;
+      lights.hemi.intensity = BASE_LIGHT.hemi * b;
+      lights.key.intensity = BASE_LIGHT.key * b;
+      lights.fill.intensity = BASE_LIGHT.fill * b;
+    }
+    const scene = sceneRef.current;
+    if (scene) {
+      const color = BG_COLORS[bgModeRef.current];
+      scene.background = color === null ? null : new THREE.Color(color);
+    }
+  }
+
+  function changeBrightness(v: number) {
+    brightnessRef.current = v;
+    setBrightness(v);
+    applyDisplay();
+    savePrefs(v, bgModeRef.current);
+  }
+
+  function changeBg(mode: BgMode) {
+    bgModeRef.current = mode;
+    setBgMode(mode);
+    applyDisplay();
+    savePrefs(brightnessRef.current, mode);
+  }
+
+  // Simpan pilihan tampilan di browser supaya tidak balik ke awal tiap refresh.
+  function savePrefs(b: number, mode: BgMode) {
+    try {
+      localStorage.setItem(DISPLAY_PREFS_KEY, JSON.stringify({ brightness: b, bg: mode }));
+    } catch {
+      /* localStorage diblokir (mode privat) — abaikan, cuma preferensi */
+    }
+  }
+
+  // Muat preferensi tampilan sebelum scene dibangun.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DISPLAY_PREFS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { brightness?: number; bg?: string };
+      if (typeof saved.brightness === 'number') {
+        const b = Math.min(Math.max(saved.brightness, 0.4), 2.5);
+        brightnessRef.current = b;
+        setBrightness(b);
+      }
+      if (saved.bg && saved.bg in BG_COLORS) {
+        bgModeRef.current = saved.bg as BgMode;
+        setBgMode(saved.bg as BgMode);
+      }
+      applyDisplay();
+    } catch {
+      /* preferensi rusak / tidak bisa dibaca — pakai default */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleLock() {
     const next = !lockOnRef.current;
@@ -292,10 +381,19 @@ export default function ModelViewer({
       }
     });
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 10, 7);
-    scene.add(dirLight);
+    // Pencahayaan meniru tampilan "Shaded" Revit: dominan cahaya menyebar
+    // (ambient + hemisphere) supaya permukaan rata & terang, ditambah 1 lampu
+    // arah sebagai pembentuk volume dan 1 lampu isi dari sisi berlawanan
+    // supaya sisi yang membelakangi cahaya tidak jadi gelap pekat.
+    const ambient = new THREE.AmbientLight(0xffffff, BASE_LIGHT.ambient);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xc8c8c8, BASE_LIGHT.hemi);
+    const keyLight = new THREE.DirectionalLight(0xffffff, BASE_LIGHT.key);
+    keyLight.position.set(5, 10, 7);
+    const fillLight = new THREE.DirectionalLight(0xffffff, BASE_LIGHT.fill);
+    fillLight.position.set(-6, 4, -8);
+    scene.add(ambient, hemi, keyLight, fillLight);
+    lightsRef.current = { ambient, hemi, key: keyLight, fill: fillLight };
+    applyDisplay();
 
     loadModel(scene, initialGlbUrl);
 
@@ -1026,18 +1124,21 @@ export default function ModelViewer({
       active ? 'border-accent bg-accent text-black' : 'border-white/20 bg-black/50 text-white hover:bg-black/70'
     }`;
 
+  // Hint singkat satu baris. Daftar pintasan lengkap ada di panel "?" supaya
+  // tidak memenuhi layar.
   const toolHint =
     tool === 'pan'
-      ? `${t.panHint} · ${t.navKeys}`
+      ? t.panHint
       : tool === 'measure'
         ? t.measureHint
         : tool === 'walk'
           ? t.walkHint
-          : markupOn
-            ? t.markupFrozen
-            : lockOn
-              ? `${t.lockOnHint} · ${t.navKeys}`
-              : `${t.isolateHint} · ${t.navKeys}`;
+          : lockOn
+            ? t.lockOnHint
+            : t.isolateHint;
+  // Bagian bawah-tengah dipakai bergantian oleh toolbar coret, legenda
+  // walkthrough, dan hasil ukur — hint disembunyikan supaya tidak bertumpuk.
+  const showHint = !markupOn && !walking && measureDist == null;
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -1124,15 +1225,74 @@ export default function ModelViewer({
             />
           </div>
         )}
-      </div>
 
-      {/* Hint tool aktif + pintasan Shift (atas-tengah). */}
-      <div className="pointer-events-none absolute left-1/2 top-3 z-20 max-w-[46%] -translate-x-1/2 rounded bg-black/40 px-2 py-1 text-center text-xs text-white opacity-80 backdrop-blur">
-        <div>{toolHint}</div>
-        {tool !== 'walk' && !markupOn && (
-          <div className="mt-0.5 text-[10px] opacity-70">{t.shiftKeys}</div>
+        {/* Tampilan: kecerahan & warna latar. */}
+        <button
+          onClick={() => setDisplayOpen((v) => !v)}
+          className={dockBtn(displayOpen)}
+          title={t.display}
+        >
+          💡
+        </button>
+        {displayOpen && (
+          <div className="mt-1 w-40 rounded border border-white/20 bg-black/70 p-2 text-white backdrop-blur">
+            <div className="mb-1 flex items-center justify-between text-[11px]">
+              <span className="opacity-70">{t.brightness}</span>
+              <span className="font-semibold text-accent">{brightness.toFixed(1)}×</span>
+            </div>
+            <input
+              type="range"
+              min={0.4}
+              max={2.5}
+              step={0.1}
+              value={brightness}
+              onChange={(e) => changeBrightness(parseFloat(e.target.value))}
+              className="w-full accent-accent"
+            />
+            <div className="mb-1 mt-2 text-[11px] opacity-70">{t.background}</div>
+            <div className="grid grid-cols-2 gap-1">
+              {(
+                [
+                  ['theme', t.bgTheme],
+                  ['light', t.bgLight],
+                  ['white', t.bgWhite],
+                  ['dark', t.bgDark],
+                ] as [BgMode, string][]
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => changeBg(id)}
+                  className={`rounded px-1.5 py-1 text-[10px] transition-colors ${
+                    bgMode === id ? 'bg-accent text-black' : 'bg-white/10 text-white hover:bg-white/20'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Daftar pintasan — disembunyikan supaya tidak memenuhi layar. */}
+        <button onClick={() => setHelpOpen((v) => !v)} className={dockBtn(helpOpen)} title={t.shortcuts}>
+          ?
+        </button>
+        {helpOpen && (
+          <div className="mt-1 w-56 rounded border border-white/20 bg-black/70 p-2 text-[10px] leading-relaxed text-white backdrop-blur">
+            <div className="mb-1 text-[11px] font-medium">{t.shortcuts}</div>
+            <div className="opacity-80">{t.navKeys}</div>
+            <div className="mt-1 opacity-80">{t.shiftKeys}</div>
+          </div>
         )}
       </div>
+
+      {/* Hint tool aktif — satu baris ringkas di bawah, supaya tidak menabrak
+          deretan tombol di kanan atas. */}
+      {showHint && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 max-w-[60%] -translate-x-1/2 truncate rounded bg-black/45 px-2 py-0.5 text-center text-[10px] text-white opacity-75 backdrop-blur">
+          {toolHint}
+        </div>
+      )}
 
       {/* Kontrol mode isolate + tampilan (kanan atas). */}
       <div className="absolute right-3 top-3 z-30 flex max-w-[70%] flex-wrap items-center justify-end gap-2">

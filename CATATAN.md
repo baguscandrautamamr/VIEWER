@@ -71,6 +71,8 @@ Website presentasi model Revit ke client:
   klik nama = isolate + fokus
 - **Putar / Geser / Ukur / Walkthrough** — dock kiri
 - **Kecepatan (⚡)** — slider 0.1×–3× untuk gerak keyboard & walkthrough
+- **Tampilan (💡)** — kecerahan 0.4×–2.5× + warna latar (tema/terang/putih/gelap)
+- **Pintasan (?)** — daftar pintasan keyboard & mouse
 - **Isolate** (Objek / Kategori), **Fokus**, **Diam**, **Section**, **Coret**, **Reset**
 - **Ganti warna** elemen terpilih — di kotak info kiri bawah
 - **Section box** — 6 slider (X+/X−, Y+/Y−, Z+/Z−) + Reset
@@ -83,6 +85,12 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- Panel **Tampilan (💡)**: slider kecerahan + pilihan warna latar, tersimpan di
+  `localStorage`. Pencahayaan default dinaikkan (ambient + hemisphere + key +
+  fill) supaya tidak terlalu gelap dibanding tampilan Shaded di Revit
+- Hint dirapikan: dipindah ke bawah-tengah, satu baris kecil, dan daftar
+  pintasan lengkap dipindah ke panel **?** — sebelumnya menabrak deretan
+  tombol di kanan atas
 - Mode Diam: lihat sekeliling dipindah dari roda tengah ke **tahan klik kiri**,
   karena tombol tengah rawan direbut autoscroll browser (`5c98884`)
 - Drag lihat-sekeliling dipindah ke listener `window` + autoscroll ditekan
@@ -187,6 +195,16 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
 
 12. **Selalu `npm run build` sebelum commit.** Error TypeScript sering baru
     muncul di tahap ini, bukan saat `npm run dev`.
+
+13. **Bagian bawah-tengah viewer dipakai bergantian** oleh toolbar coret,
+    legenda walkthrough, hasil ukur, dan hint tool. Sebelum menaruh elemen
+    baru di sana, cek dulu supaya tidak bertumpuk (lihat variabel `showHint`).
+
+14. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+    Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
+    (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
+    berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai
+    dasar ada di konstanta `BASE_LIGHT`.
 
 ---
 

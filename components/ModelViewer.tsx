@@ -35,6 +35,12 @@ const PAINT_COLORS = [0xef4444, 0xf97316, 0xeab308, 0x22c55e, 0x3b82f6, 0xa855f7
 // Lama animasi kamera mendekat ke objek (detik). Sengaja bukan lompatan:
 // kalau kamera melompat tiap klik, mata cepat lelah & kehilangan orientasi.
 const FLY_DURATION = 0.6;
+// Ambang "sudah kelihatan": bagian tinggi layar yang ditutupi elemen terpilih.
+// Di atas ini kamera DIAM saat objek diklik — mendekat hanya kalau elemennya
+// tampil kecil atau berada di luar layar. Gaya Navisworks: klik ≠ pindah kamera.
+const MIN_SCREEN_COVERAGE = 0.25;
+// Warna kotak penanda elemen terpilih.
+const SELECTION_BOX_COLOR = 0x22d3ee;
 // Sensitivitas menoleh (radian per piksel geseran mouse).
 const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
 const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
@@ -89,10 +95,13 @@ export default function ModelViewer({
     new Map()
   );
   const modeRef = useRef<IsolateMode>('object');
-  const isolateOnRef = useRef(true);
+  const isolateOnRef = useRef(false);
   const dimMaterialRef = useRef<THREE.Material | null>(null);
   // Mesh yang terakhir diklik.
   const selectedMeshRef = useRef<THREE.Mesh | null>(null);
+  // Kotak penanda elemen terpilih (gaya Navisworks). Ditaruh di scene, BUKAN di
+  // dalam model, supaya tidak ikut kena raycast maupun forEachMesh.
+  const selectionBoxRef = useRef<THREE.Box3Helper | null>(null);
   // Warna manual per GlobalId. Materialnya dipegang di sini (bukan di mesh)
   // supaya warnanya BERTAHAN saat isolate: `restoreMesh` mengembalikan material
   // warna ini, bukan material asli, selama entri-nya masih ada.
@@ -153,7 +162,10 @@ export default function ModelViewer({
   const bgModeRef = useRef<BgMode>('theme');
 
   const [mode, setMode] = useState<IsolateMode>('object');
-  const [isolateOn, setIsolateOn] = useState(true);
+  // Isolate mulai MATI: klik objek cuma memberi kotak penanda, model lain tetap
+  // utuh supaya konteks sekelilingnya kelihatan (gaya Navisworks). Nyalakan
+  // tombol Isolate kalau memang ingin sisanya diredupkan.
+  const [isolateOn, setIsolateOn] = useState(false);
   const [selected, setSelected] = useState<{
     globalId: string;
     category: string | null;
@@ -201,7 +213,14 @@ export default function ModelViewer({
     const next = !isolateOnRef.current;
     isolateOnRef.current = next;
     setIsolateOn(next);
+    // Langsung berlaku ke elemen yang sedang terpilih — kalau harus diklik
+    // ulang dulu, tombolnya terasa tidak bereaksi.
+    const mesh = selectedMeshRef.current;
     if (!next) resetIsolation();
+    else if (mesh) {
+      if (modeRef.current === 'category') isolateByCategory(mesh);
+      else isolateGid((mesh.userData.globalId as string) || '');
+    }
   }
 
   function showNotice(message: string) {
@@ -654,14 +673,15 @@ export default function ModelViewer({
         return;
       }
 
-      // orbit / pan -> seleksi + isolate
+      // orbit / pan -> pilih elemen: beri kotak penanda, model lain dibiarkan
+      // utuh. Meredupkan yang lain hanya kalau tombol Isolate dinyalakan.
       if (hit) {
         const target = hit.object as THREE.Mesh;
         const gid = (target.userData.globalId as string) || null;
         selectedMeshRef.current = target;
         if (isolateOnRef.current) {
           if (modeRef.current === 'category') isolateByCategory(target);
-          else isolateMesh(target);
+          else isolateGid(gid ?? '');
         }
         setSelected({
           globalId: gid ?? '—',
@@ -670,12 +690,11 @@ export default function ModelViewer({
           color: gid ? paintOf(gid) : null,
         });
         onElementSelect?.(gid);
-        focusOnMesh(target);
+        const box = boxOfGid(gid ?? '', target);
+        showSelectionBox(box);
+        focusOnBox(box);
       } else {
-        resetIsolation();
-        selectedMeshRef.current = null;
-        setSelected(null);
-        onElementSelect?.(null);
+        clearSelection();
       }
     }
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
@@ -939,10 +958,12 @@ export default function ModelViewer({
         colorMatByGid.current.forEach((mat) => mat.dispose());
         colorMatByGid.current.clear();
         selectedMeshRef.current = null;
+        showSelectionBox(null); // mesh lama sudah dibuang, kotaknya ikut hilang
 
         gltf.scene.traverse((child) => {
           if (child instanceof THREE.Mesh) {
-            const globalId = child.userData?.gltfExtensions?.globalId ?? child.name;
+            const raw = child.userData?.gltfExtensions?.globalId ?? child.name;
+            const globalId = normalizeMeshId(raw);
             child.userData.globalId = globalId;
             meshesByGlobalId.current.set(globalId, child);
             originalMaterials.current.set(child, child.material);
@@ -993,8 +1014,69 @@ export default function ModelViewer({
     setTreeData(cats);
   }
 
+  // Tombol Fokus: kalau ada elemen terpilih, dekati elemen itu (dipaksa, walau
+  // sudah kelihatan — user memang minta); kalau tidak ada, bingkai ulang
+  // seluruh model.
   function focusModel() {
+    const mesh = selectedMeshRef.current;
+    if (mesh) {
+      focusOnBox(boxOfGid((mesh.userData.globalId as string) || '', mesh), true);
+      return;
+    }
     if (modelRootRef.current) frameCameraToObject(modelRootRef.current);
+  }
+
+  // --- Kotak penanda elemen terpilih ---
+  // Kotak meliputi SELURUH mesh milik elemen itu, bukan cuma yang kena klik.
+  function boxOfGid(gid: string, fallback?: THREE.Mesh | null): THREE.Box3 {
+    const box = new THREE.Box3();
+    forEachMeshOfGid(gid, (mesh) => box.expandByObject(mesh));
+    if (box.isEmpty() && fallback) box.setFromObject(fallback);
+    return box;
+  }
+
+  function showSelectionBox(box: THREE.Box3 | null) {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (!box || box.isEmpty()) {
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+      return;
+    }
+    let helper = selectionBoxRef.current;
+    if (!helper) {
+      helper = new THREE.Box3Helper(box.clone(), new THREE.Color(SELECTION_BOX_COLOR));
+      // Tembus pandang supaya kotaknya tetap terlihat walau elemennya berada di
+      // balik dinding — sama seperti penanda titik ukur.
+      const mat = helper.material as THREE.LineBasicMaterial;
+      mat.depthTest = false;
+      mat.transparent = true;
+      helper.renderOrder = 998;
+      scene.add(helper);
+      selectionBoxRef.current = helper;
+    } else {
+      helper.box.copy(box);
+    }
+    helper.visible = true;
+  }
+
+  // Dipanggil setiap visibilitas berubah: kotak penanda ikut hilang kalau
+  // elemennya disembunyikan (kotak melayang tanpa isi bikin bingung), dan
+  // muncul lagi begitu elemennya ditampilkan kembali.
+  function syncSelectionBox() {
+    const mesh = selectedMeshRef.current;
+    if (!mesh || mesh.visible === false) {
+      showSelectionBox(null);
+      return;
+    }
+    showSelectionBox(boxOfGid((mesh.userData.globalId as string) || '', mesh));
+  }
+
+  function clearSelection() {
+    resetIsolation();
+    selectedMeshRef.current = null;
+    setSelected(null);
+    showSelectionBox(null);
+    onElementSelect?.(null);
   }
 
   // Mulai animasi kamera. Dijalankan frame demi frame di animate loop, bukan
@@ -1012,12 +1094,35 @@ export default function ModelViewer({
     };
   }
 
-  function focusOnMesh(mesh: THREE.Mesh) {
+  // "Sudah kelihatan jelas" = ada di dalam frustum kamera DAN tingginya di
+  // layar melewati MIN_SCREEN_COVERAGE. Dua-duanya perlu: elemen besar yang
+  // berada di belakang kamera tetap harus didekati, dan elemen di tengah layar
+  // yang cuma sebesar titik juga masih perlu didekati.
+  function isWellVisible(sphere: THREE.Sphere): boolean {
+    const camera = cameraRef.current;
+    if (!camera) return false;
+    camera.updateMatrixWorld();
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    );
+    if (!frustum.intersectsSphere(sphere)) return false;
+    const dist = camera.position.distanceTo(sphere.center);
+    if (dist < 1e-6) return true; // kamera tepat di dalam objek
+    // Tinggi separuh layar pada jarak itu; bandingkan dengan jari-jari objek.
+    const halfHeight = dist * Math.tan(((camera.fov * Math.PI) / 180) / 2);
+    return sphere.radius / halfHeight >= MIN_SCREEN_COVERAGE;
+  }
+
+  // Kamera hanya bergerak kalau perlu — persis permintaannya: sudah dekat =
+  // diam, jauh = mendekat. "Sudah dekat" diukur dari seberapa besar elemen
+  // tampil di layar (MIN_SCREEN_COVERAGE), bukan dari jarak mentah, karena
+  // jarak 10 m itu dekat untuk atap tapi jauh untuk sekrup.
+  //
+  // `force` dipakai tombol Fokus: di sana user memang minta kamera bergerak.
+  function focusOnBox(box: THREE.Box3, force = false) {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
-    if (!camera || !controls) return;
-    const box = new THREE.Box3().setFromObject(mesh);
-    if (box.isEmpty()) return;
+    if (!camera || !controls || box.isEmpty()) return;
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const center = sphere.center.clone();
 
@@ -1029,6 +1134,8 @@ export default function ModelViewer({
     const vFov = (camera.fov * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
     const fit = (sphere.radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.15;
+
+    if (!force && isWellVisible(sphere)) return; // sudah kelihatan jelas — jangan diusik
 
     // Klik objek harus MENDEKAT, tidak pernah menjauh: jarak dibatasi jarak
     // kamera sekarang. Untuk objek raksasa hasilnya kamera tinggal berpindah
@@ -1101,6 +1208,31 @@ export default function ModelViewer({
     controls.update();
   }
 
+  // Satu elemen bisa jadi BEBERAPA mesh di Three.js: kalau geometrinya punya
+  // lebih dari satu material, GLTFLoader membuat satu Mesh per primitive dan
+  // menamainya lewat createUniqueName -> "GUID", "GUID_1", "GUID_2". Akhiran
+  // itu dibuang supaya semua potongan satu elemen punya id yang sama; kalau
+  // tidak, isolate cuma menyalakan potongan yang kena klik dan potongan
+  // bersuffix gagal dicari namanya (tampil "Tanpa kategori").
+  //
+  // Akhiran hanya dibuang kalau sisanya masuk akal sebagai id: GlobalId selalu
+  // 22 karakter, ElementId selalu angka. Jadi GlobalId yang KEBETULAN berakhiran
+  // "_1" (masih 22 karakter) tidak ikut terpotong.
+  function normalizeMeshId(raw: string): string {
+    const m = /^(.+)_\d+$/.exec(raw || '');
+    if (!m) return raw;
+    const base = m[1];
+    return base.length === 22 || /^\d+$/.test(base) ? base : raw;
+  }
+
+  // Semua mesh milik satu elemen (lihat normalizeMeshId).
+  function forEachMeshOfGid(gid: string, cb: (mesh: THREE.Mesh) => void) {
+    if (!gid) return;
+    forEachMesh((mesh) => {
+      if ((mesh.userData.globalId as string) === gid) cb(mesh);
+    });
+  }
+
   function forEachMesh(cb: (mesh: THREE.Mesh) => void) {
     const root = modelRootRef.current;
     if (!root) return;
@@ -1141,9 +1273,11 @@ export default function ModelViewer({
     return null;
   }
 
-  function isolateMesh(target: THREE.Mesh) {
+  // Isolate per ELEMEN, bukan per mesh: elemen yang terpecah beberapa primitive
+  // harus menyala utuh, bukan cuma potongan yang kena klik.
+  function isolateGid(gid: string) {
     forEachMesh((mesh) => {
-      if (mesh === target) restoreMesh(mesh);
+      if ((mesh.userData.globalId as string) === gid) restoreMesh(mesh);
       else dimMesh(mesh);
     });
   }
@@ -1151,7 +1285,7 @@ export default function ModelViewer({
   function isolateByCategory(target: THREE.Mesh) {
     const targetCat = categoryOf(target);
     if (!targetCat) {
-      isolateMesh(target);
+      isolateGid((target.userData.globalId as string) || '');
       return;
     }
     forEachMesh((mesh) => {
@@ -1217,10 +1351,7 @@ export default function ModelViewer({
     const gid = selected?.globalId;
     if (!gid || gid === '—') return;
     setElementVisible(gid, false);
-    resetIsolation();
-    selectedMeshRef.current = null;
-    setSelected(null);
-    onElementSelect?.(null);
+    clearSelection();
     showNotice(t.hideObjectNotice);
   }
 
@@ -1323,12 +1454,16 @@ export default function ModelViewer({
     selectedMeshRef.current = mesh;
     if (isolateOnRef.current) {
       if (modeRef.current === 'category') isolateByCategory(mesh);
-      else isolateMesh(mesh);
+      else isolateGid(gid);
     }
     setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid), color: paintOf(gid) });
     onElementSelect?.(gid);
-    // Sama seperti klik di 3D: kamera mendekat dengan beranimasi.
-    focusOnMesh(mesh);
+    // Sama seperti klik di 3D: kotak penanda, dan kamera mendekat hanya kalau
+    // elemennya belum kelihatan jelas — dipilih dari panel biasanya memang
+    // belum kelihatan, jadi di sini kamera hampir selalu bergerak.
+    const box = boxOfGid(gid, mesh);
+    showSelectionBox(box);
+    focusOnBox(box);
   }
 
   function selectCategory(cat: string) {
@@ -1340,13 +1475,15 @@ export default function ModelViewer({
       selectedMeshRef.current = mesh;
       const gid = mesh.userData.globalId as string;
       setSelected({ globalId: gid, category: cat, name: nameOf(gid), color: paintOf(gid) });
+      showSelectionBox(boxOfGid(gid, mesh));
     }
   }
 
   function setElementVisible(gid: string, visible: boolean) {
-    forEachMesh((mesh) => {
-      if ((mesh.userData.globalId as string) === gid) mesh.visible = visible;
+    forEachMeshOfGid(gid, (mesh) => {
+      mesh.visible = visible;
     });
+    syncSelectionBox();
     setHiddenIds((prev) => {
       const next = new Set(prev);
       if (visible) next.delete(gid);
@@ -1359,6 +1496,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       if ((categoryOf(mesh) ?? DEFAULT_CATEGORY) === cat) mesh.visible = visible;
     });
+    syncSelectionBox();
     setHiddenCategories((prev) => {
       const next = new Set(prev);
       if (visible) next.delete(cat);
@@ -1371,6 +1509,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       mesh.visible = true;
     });
+    syncSelectionBox();
     setHiddenCategories(new Set());
     setHiddenIds(new Set());
   }
@@ -1387,6 +1526,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       mesh.visible = false;
     });
+    syncSelectionBox();
     setHiddenCategories(new Set(treeData.map((c) => c.category)));
     setHiddenIds(new Set());
   }
@@ -1583,7 +1723,7 @@ export default function ModelViewer({
           className={`${btnBase} border border-white/20 backdrop-blur ${
             isolateOn ? 'bg-accent text-black' : 'bg-black/50 text-white'
           }`}
-          title={t.isolate}
+          title={t.isolateTip}
         >
           {t.isolate}
         </button>
@@ -1639,11 +1779,7 @@ export default function ModelViewer({
           {t.markup}
         </button>
         <button
-          onClick={() => {
-            resetIsolation();
-            setSelected(null);
-            selectedMeshRef.current = null;
-          }}
+          onClick={clearSelection}
           className={`${btnBase} border border-white/20 bg-black/50 text-white backdrop-blur`}
         >
           {t.resetView}

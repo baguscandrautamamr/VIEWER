@@ -74,6 +74,8 @@ export default function ModelViewer({
   const meshesByGlobalId = useRef<Map<string, THREE.Mesh>>(new Map());
   const originalMaterials = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
   const categoryByGlobalId = useRef<Map<string, string>>(new Map());
+  // GlobalId -> nama elemen yang bisa dibaca manusia (dari tabel `elements`).
+  const nameByGlobalId = useRef<Map<string, string>>(new Map());
   const modeRef = useRef<IsolateMode>('object');
   const isolateOnRef = useRef(true);
   const dimMaterialRef = useRef<THREE.Material | null>(null);
@@ -125,7 +127,11 @@ export default function ModelViewer({
 
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
-  const [selected, setSelected] = useState<{ globalId: string; category: string | null } | null>(null);
+  const [selected, setSelected] = useState<{
+    globalId: string;
+    category: string | null;
+    name: string | null;
+  } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [markupOn, setMarkupOn] = useState(false);
@@ -333,21 +339,35 @@ export default function ModelViewer({
     }
   }
 
-  // Ambil peta kategori tiap elemen dari Supabase (anon, dibatasi RLS).
+  // Ambil kategori + nama tiap elemen dari Supabase (anon, dibatasi RLS).
+  //
+  // Objek di GLB dinamai GlobalId (IfcConvert dijalankan dengan
+  // --use-element-guids), jadi nama yang bisa dibaca manusia HANYA ada di
+  // tabel ini. Kalau tabel kosong, viewer terpaksa menampilkan GlobalId dan
+  // semua elemen jatuh ke kategori "Default" — isi tabelnya dengan
+  // `node scripts/ifc-to-web.mjs <file.ifc> <project_id>`.
   useEffect(() => {
     let active = true;
     getSupabase()
       .from('elements')
-      .select('global_id, category')
+      .select('global_id, category, name')
       .eq('project_id', projectId)
       .then(({ data }) => {
         if (!active || !data) return;
-        const map = new Map<string, string>();
+        const cats = new Map<string, string>();
+        const names = new Map<string, string>();
         data.forEach((row) => {
-          if (row.category) map.set(row.global_id as string, row.category as string);
+          const gid = row.global_id as string;
+          if (row.category) cats.set(gid, row.category as string);
+          if (row.name) names.set(gid, row.name as string);
         });
-        categoryByGlobalId.current = map;
-        buildTree(); // kategori dari DB baru datang -> susun ulang tree
+        categoryByGlobalId.current = cats;
+        nameByGlobalId.current = names;
+        buildTree(); // data dari DB baru datang -> susun ulang tree
+        // Info elemen yang sedang terpilih ikut diperbarui supaya namanya muncul.
+        setSelected((cur) =>
+          cur ? { ...cur, name: names.get(cur.globalId) ?? cur.name } : cur
+        );
       });
     return () => {
       active = false;
@@ -547,7 +567,11 @@ export default function ModelViewer({
           if (modeRef.current === 'category') isolateByCategory(target);
           else isolateMesh(target);
         }
-        setSelected({ globalId: gid ?? '—', category: categoryOf(target) });
+        setSelected({
+          globalId: gid ?? '—',
+          category: categoryOf(target),
+          name: gid ? nameOf(gid) : null,
+        });
         onElementSelect?.(gid);
       } else {
         resetIsolation();
@@ -839,7 +863,8 @@ export default function ModelViewer({
       const cat = categoryOf(child) ?? DEFAULT_CATEGORY;
       if (!byCat.has(cat)) byCat.set(cat, new Map());
       const inner = byCat.get(cat)!;
-      if (!inner.has(gid)) inner.set(gid, child.name || gid);
+      // Utamakan nama dari tabel `elements`; `child.name` isinya GlobalId.
+      if (!inner.has(gid)) inner.set(gid, nameOf(gid) ?? (child.name || gid));
     });
     const cats: TreeCategory[] = Array.from(byCat.entries())
       .map(([category, inner]) => ({
@@ -931,6 +956,13 @@ export default function ModelViewer({
     root.traverse((child) => {
       if (child instanceof THREE.Mesh) cb(child);
     });
+  }
+
+  // Nama elemen yang bisa dibaca manusia. Sumbernya tabel `elements`; kalau
+  // belum diimpor, `child.name` isinya cuma GlobalId sehingga tidak berguna
+  // untuk ditampilkan — kembalikan null supaya pemanggil bisa memilih fallback.
+  function nameOf(gid: string): string | null {
+    return nameByGlobalId.current.get(gid) ?? null;
   }
 
   function categoryOf(mesh: THREE.Mesh): string | null {
@@ -1060,7 +1092,7 @@ export default function ModelViewer({
       if (modeRef.current === 'category') isolateByCategory(mesh);
       else isolateMesh(mesh);
     }
-    setSelected({ globalId: gid, category: categoryOf(mesh) });
+    setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid) });
     onElementSelect?.(gid);
     focusOnMesh(mesh);
   }
@@ -1072,7 +1104,8 @@ export default function ModelViewer({
     if (isolateOnRef.current && mesh) isolateByCategory(mesh);
     if (mesh) {
       selectedMeshRef.current = mesh;
-      setSelected({ globalId: mesh.userData.globalId as string, category: cat });
+      const gid = mesh.userData.globalId as string;
+      setSelected({ globalId: gid, category: cat, name: nameOf(gid) });
     }
   }
 
@@ -1443,10 +1476,13 @@ export default function ModelViewer({
 
       {/* Info elemen terpilih. */}
       {selected && (
-        <div className="absolute bottom-3 left-3 z-30 rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur">
+        <div className="absolute bottom-3 left-3 z-30 max-w-[18rem] rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur">
           <div className="opacity-60">{t.selected}</div>
           <div className="font-medium">{selected.category ?? t.noCategory}</div>
-          <div className="opacity-50">{selected.globalId}</div>
+          {selected.name && <div className="break-words opacity-80">{selected.name}</div>}
+          <div className="truncate opacity-40" title={selected.globalId}>
+            {selected.globalId}
+          </div>
         </div>
       )}
 

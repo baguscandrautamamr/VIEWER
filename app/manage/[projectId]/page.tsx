@@ -4,6 +4,7 @@ import { isAdminAuthed, adminPasswordConfigured } from '@/lib/adminAuth';
 import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import AdminLogin from '@/components/AdminLogin';
 import UploadModel from '@/components/UploadModel';
+import ImportElements from '@/components/ImportElements';
 import DeleteModelFileButton from '@/components/DeleteModelFileButton';
 import SheetVisibilityList, { type ManageSheet } from '@/components/SheetVisibilityList';
 import UiToggles from '@/components/UiToggles';
@@ -65,6 +66,15 @@ export default async function ManagePage({
     .eq('project_id', projectId)
     .order('sort_order', { ascending: true });
 
+  // Cek apakah nama & kategori elemen sudah diimpor. Objek di GLB dinamai
+  // GlobalId (IfcConvert --use-element-guids), jadi tanpa isi tabel `elements`
+  // viewer cuma bisa menampilkan kode acak & kategori "Default". Cukup hitung,
+  // tidak perlu tarik datanya.
+  const { count: elementCount } = await supabase
+    .from('elements')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId);
+
   const list = (files ?? []) as ModelFileRow[];
   const sheets: ManageSheet[] = ((sheetRows ?? []) as SheetRow[]).map((s) => ({
     id: s.id,
@@ -87,6 +97,29 @@ export default async function ManagePage({
           </Link>
         </div>
       </div>
+
+      {/* Peringatan kalau nama & kategori elemen belum diimpor — kalau tidak,
+          masalahnya baru ketahuan saat model sudah tampil ke client. */}
+      {!elementCount && (
+        <div className="mb-4 rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-500">
+          <p className="font-medium">{t.manage.elementsMissing}</p>
+          <p className="mt-1 opacity-90">{t.manage.elementsMissingHint}</p>
+        </div>
+      )}
+
+      <ImportElements
+        projectId={projectId}
+        strings={{
+          title: t.manage.importTitle,
+          hint: t.manage.importHint,
+          button: t.manage.importButton,
+          reading: t.manage.importReading,
+          saving: t.manage.importSaving,
+          done: t.manage.importDone,
+          noElements: t.manage.importNoElements,
+          pickFile: t.manage.importPickFile,
+        }}
+      />
 
       <UploadModel
         projectId={projectId}

@@ -83,6 +83,11 @@ export default function ModelViewer({
   const categoryByGlobalId = useRef<Map<string, string>>(new Map());
   // GlobalId -> nama elemen yang bisa dibaca manusia (dari tabel `elements`).
   const nameByGlobalId = useRef<Map<string, string>>(new Map());
+  // Indeks cadangan: ElementId Revit (ekor angka pada Name IFC) -> kategori &
+  // nama. Dipakai untuk objek GLB yang dinamai angka, bukan GlobalId.
+  const elementByElementId = useRef<Map<string, { category: string | null; name: string | null }>>(
+    new Map()
+  );
   const modeRef = useRef<IsolateMode>('object');
   const isolateOnRef = useRef(true);
   const dimMaterialRef = useRef<THREE.Material | null>(null);
@@ -93,9 +98,7 @@ export default function ModelViewer({
   // warna ini, bukan material asli, selama entri-nya masih ada.
   const colorMatByGid = useRef<Map<string, THREE.MeshStandardMaterial>>(new Map());
 
-  // --- Auto-fokus & animasi kamera ---
-  // Dibaca di dalam handler klik yang dipasang sekali saat mount -> harus ref.
-  const autoFocusRef = useRef(true);
+  // --- Animasi kamera (auto-fokus saat objek dipilih) ---
   // Tween kamera yang sedang berjalan; dijalankan di animate loop, dibatalkan
   // begitu user menyentuh mouse/keyboard supaya tidak berebut kendali.
   const flyRef = useRef<{
@@ -181,7 +184,6 @@ export default function ModelViewer({
   const [bgMode, setBgMode] = useState<BgMode>('theme');
   const [helpOpen, setHelpOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [autoFocus, setAutoFocus] = useState(true);
   // Pesan sekilas di pojok kanan bawah (mis. cara mengembalikan objek yang
   // baru disembunyikan) — supaya tidak ada objek yang "hilang" tanpa jalan pulang.
   const [notice, setNotice] = useState<string | null>(null);
@@ -200,12 +202,6 @@ export default function ModelViewer({
     isolateOnRef.current = next;
     setIsolateOn(next);
     if (!next) resetIsolation();
-  }
-
-  function toggleAutoFocus() {
-    const next = !autoFocusRef.current;
-    autoFocusRef.current = next;
-    setAutoFocus(next);
   }
 
   function showNotice(message: string) {
@@ -404,6 +400,13 @@ export default function ModelViewer({
   // semua elemen jatuh ke kategori "Default" — isi lewat tombol impor di
   // halaman Kelola.
   //
+  // TIDAK SEMUA objek GLB dinamai GlobalId. Sebagian (sering fitting seperti
+  // tee/bend cable tray) bernama ANGKA — itu ElementId Revit, bukan GlobalId,
+  // jadi pencarian ke tabel `elements` meleset dan elemennya tampil sebagai
+  // "Tanpa kategori" walaupun datanya ada. Untungnya ElementId itu ikut
+  // tertulis di ekor Name IFC (`Family:Type:1073322`), jadi dibuat indeks
+  // cadangan: ekor angka -> kategori & nama. Lihat `altKeyOf`.
+  //
   // WAJIB paginasi: Supabase membatasi jumlah baris per permintaan (bawaannya
   // 1000). Model besar gampang punya puluhan ribu elemen, dan tanpa paginasi
   // sisanya hilang DIAM-DIAM — tabel terisi penuh, tapi elemen yang barisnya
@@ -416,6 +419,7 @@ export default function ModelViewer({
       const MAX_PAGES = 500; // pengaman: berhenti di 500rb baris
       const cats = new Map<string, string>();
       const names = new Map<string, string>();
+      const alts = new Map<string, { category: string | null; name: string | null }>();
       let from = 0;
 
       for (let page = 0; page < MAX_PAGES; page++) {
@@ -434,8 +438,13 @@ export default function ModelViewer({
 
         data.forEach((row) => {
           const gid = row.global_id as string;
-          if (row.category) cats.set(gid, row.category as string);
-          if (row.name) names.set(gid, row.name as string);
+          const cat = (row.category as string) || null;
+          const nm = (row.name as string) || null;
+          if (cat) cats.set(gid, cat);
+          if (nm) names.set(gid, nm);
+          // Indeks cadangan lewat ElementId Revit (lihat komentar di atas).
+          const alt = nm ? /:(\d{3,})\s*$/.exec(nm)?.[1] : null;
+          if (alt) alts.set(alt, { category: cat, name: nm });
         });
         // Maju sebanyak baris yang BENAR-BENAR diterima — batas server bisa
         // lebih kecil dari PAGE, dan kalau maju sebesar PAGE barisnya terlewat.
@@ -445,6 +454,7 @@ export default function ModelViewer({
       if (!active) return;
       categoryByGlobalId.current = cats;
       nameByGlobalId.current = names;
+      elementByElementId.current = alts;
       buildTree(); // data dari DB baru datang -> susun ulang tree
       // Info elemen yang sedang terpilih ikut diperbarui supaya namanya muncul.
       setSelected((cur) => (cur ? { ...cur, name: names.get(cur.globalId) ?? cur.name } : cur));
@@ -660,7 +670,7 @@ export default function ModelViewer({
           color: gid ? paintOf(gid) : null,
         });
         onElementSelect?.(gid);
-        if (autoFocusRef.current) focusOnMesh(target);
+        focusOnMesh(target);
       } else {
         resetIsolation();
         selectedMeshRef.current = null;
@@ -1090,13 +1100,29 @@ export default function ModelViewer({
   // belum diimpor, `child.name` isinya cuma GlobalId sehingga tidak berguna
   // untuk ditampilkan — kembalikan null supaya pemanggil bisa memilih fallback.
   function nameOf(gid: string): string | null {
-    return nameByGlobalId.current.get(gid) ?? null;
+    const direct = nameByGlobalId.current.get(gid);
+    if (direct) return direct;
+    const alt = altKeyOf(gid);
+    return (alt && elementByElementId.current.get(alt)?.name) || null;
+  }
+
+  // Nama objek GLB yang berupa ANGKA adalah ElementId Revit, bukan GlobalId —
+  // itu kunci untuk indeks cadangan. GlobalId panjangnya selalu 22 karakter,
+  // jadi dikecualikan supaya GUID yang kebetulan diawali angka tidak salah
+  // dijodohkan. Akhiran non-angka (mis. "1073322_1" untuk objek yang
+  // geometrinya terpecah) ikut diterima.
+  function altKeyOf(id: string): string | null {
+    if (!id || id.length === 22) return null;
+    return /^(\d{3,})(?:[^0-9].*)?$/.exec(id)?.[1] ?? null;
   }
 
   function categoryOf(mesh: THREE.Mesh): string | null {
     const gid = (mesh.userData.globalId as string) || '';
     const fromDb = categoryByGlobalId.current.get(gid);
     if (fromDb) return fromDb;
+    const alt = altKeyOf(gid);
+    const fromAlt = alt && elementByElementId.current.get(alt)?.category;
+    if (fromAlt) return fromAlt;
     const name = mesh.name || '';
     if (name.includes(':')) return name.split(':')[0].trim() || null;
     return null;
@@ -1288,9 +1314,8 @@ export default function ModelViewer({
     }
     setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid), color: paintOf(gid) });
     onElementSelect?.(gid);
-    // Ikut aturan yang sama dengan klik di 3D: fokus hanya kalau auto-fokus
-    // menyala, dan gerakannya beranimasi.
-    if (autoFocusRef.current) focusOnMesh(mesh);
+    // Sama seperti klik di 3D: kamera mendekat dengan beranimasi.
+    focusOnMesh(mesh);
   }
 
   function selectCategory(cat: string) {
@@ -1433,13 +1458,6 @@ export default function ModelViewer({
           🚶
         </button>
         <div className="my-0.5 h-px w-9 bg-white/10" />
-        <button
-          onClick={toggleAutoFocus}
-          className={dockBtn(autoFocus)}
-          title={autoFocus ? t.autoFocusOn : t.autoFocusOff}
-        >
-          🎯
-        </button>
         <button
           onClick={() => setSpeedOpen((v) => !v)}
           className={dockBtn(speedOpen)}
@@ -1724,25 +1742,31 @@ export default function ModelViewer({
           — keduanya di sisi kiri, kalau tidak digeser kotaknya tertutup panel. */}
       {selected && (
         <div
-          className="absolute bottom-3 z-30 w-60 rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur transition-all duration-300"
+          className="absolute bottom-3 z-30 w-52 rounded bg-black/70 px-2 py-1.5 text-[11px] leading-tight text-white backdrop-blur transition-all duration-300"
           style={{ left: treeOpen ? '17rem' : '0.75rem' }}
         >
-          <div className="opacity-60">{t.selected}</div>
-          <div className="font-medium">{selected.category ?? t.noCategory}</div>
-          {selected.name && <div className="break-words opacity-80">{selected.name}</div>}
-          <div className="truncate opacity-40" title={selected.globalId}>
-            {selected.globalId}
+          <div className="flex items-baseline gap-1">
+            <span className="truncate font-medium" title={selected.category ?? t.noCategory}>
+              {selected.category ?? t.noCategory}
+            </span>
+            <span className="ml-auto shrink-0 text-[9px] opacity-40" title={selected.globalId}>
+              {selected.globalId}
+            </span>
           </div>
+          {selected.name && (
+            <div className="truncate text-[10px] opacity-70" title={selected.name}>
+              {selected.name}
+            </div>
+          )}
 
-          {/* Warna & sembunyi: sementara, hanya di layar ini. */}
-          <div className="mt-2 flex items-center gap-1 border-t border-white/10 pt-2">
-            <span className="mr-0.5 shrink-0 opacity-60">{t.color}</span>
+          {/* Warna & sembunyi dalam satu baris — sementara, hanya di layar ini. */}
+          <div className="mt-1 flex items-center gap-0.5 border-t border-white/10 pt-1">
             {PAINT_COLORS.map((c) => (
               <button
                 key={c}
                 onClick={() => applyColor(c)}
                 title={t.color}
-                className={`h-4 w-4 shrink-0 rounded-full border transition-transform hover:scale-110 ${
+                className={`h-3 w-3 shrink-0 rounded-full border transition-transform hover:scale-125 ${
                   selected.color === c ? 'border-white ring-1 ring-white' : 'border-white/30'
                 }`}
                 style={{ backgroundColor: `#${c.toString(16).padStart(6, '0')}` }}
@@ -1752,18 +1776,18 @@ export default function ModelViewer({
               onClick={resetColor}
               disabled={selected.color == null}
               title={t.colorReset}
-              className="ml-0.5 shrink-0 text-sm opacity-70 hover:opacity-100 disabled:opacity-25"
+              className="shrink-0 text-xs opacity-70 hover:opacity-100 disabled:opacity-25"
             >
               ↺
             </button>
+            <button
+              onClick={hideSelected}
+              title={t.hideObjectNotice}
+              className="ml-auto shrink-0 rounded border border-white/20 bg-white/10 px-1.5 py-px text-[10px] transition-colors hover:bg-white/20"
+            >
+              {t.hideObject}
+            </button>
           </div>
-          <button
-            onClick={hideSelected}
-            className="mt-2 w-full rounded border border-white/20 bg-white/10 px-2 py-1 text-[11px] transition-colors hover:bg-white/20"
-            title={t.hideObjectNotice}
-          >
-            {t.hideObject}
-          </button>
         </div>
       )}
 

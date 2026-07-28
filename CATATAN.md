@@ -54,6 +54,7 @@ Website presentasi model Revit ke client:
 |---|---|
 | Klik kiri + geser | Putar model (orbit) |
 | Klik kiri (tanpa geser) | Pilih elemen — kotak penanda; model lain tetap utuh |
+| **Shift + klik kiri (tanpa geser)** | Pilih objek di BALIK objek yang sekarang (bertumpuk) |
 | Scroll | Zoom |
 | **Klik kiri + geser** (saat mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
 | **Shift + klik kiri + geser** | Lihat kiri/kanan |
@@ -92,6 +93,11 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Shift + klik = tembus objek yang bertumpuk.** Objek yang diincar sering
+  terhalang elemen lain (mis. elemen besar tak terlihat yang menutupi kolom).
+  Shift + klik di titik yang sama memajukan pilihan ke objek berikutnya di
+  belakangnya, dan kotak terpilih menampilkan penanda "2/5 ⇧". Tidak bentrok
+  dengan Shift + geser (menoleh) karena yang itu berakhir dengan `moved = true`
 - **Klik objek jadi mirip Navisworks.** Tiga perubahan sekaligus:
   (1) kamera **diam** kalau elemen sudah kelihatan jelas — mendekat hanya kalau
   elemen tampil kecil (<25% tinggi layar) atau di luar layar; (2) elemen

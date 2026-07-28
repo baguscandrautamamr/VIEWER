@@ -102,6 +102,9 @@ export default function ModelViewer({
   // Kotak penanda elemen terpilih (gaya Navisworks). Ditaruh di scene, BUKAN di
   // dalam model, supaya tidak ikut kena raycast maupun forEachMesh.
   const selectionBoxRef = useRef<THREE.Box3Helper | null>(null);
+  // Titik klik terakhir + urutan objek yang sedang dipilih di titik itu, supaya
+  // Shift + klik berulang bisa menembus objek yang bertumpuk.
+  const pickRef = useRef<{ x: number; y: number; index: number } | null>(null);
   // Warna manual per GlobalId. Materialnya dipegang di sini (bukan di mesh)
   // supaya warnanya BERTAHAN saat isolate: `restoreMesh` mengembalikan material
   // warna ini, bukan material asli, selama entri-nya masih ada.
@@ -171,6 +174,10 @@ export default function ModelViewer({
     category: string | null;
     name: string | null;
     color: number | null;
+    // Urutan objek yang dipilih di titik klik ini (1 dari n) — dipakai untuk
+    // memberi tahu bahwa masih ada objek lain di baliknya (Shift + klik).
+    pickIndex?: number;
+    pickCount?: number;
   } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -653,9 +660,8 @@ export default function ModelViewer({
     }
 
     function handleClick(event: MouseEvent) {
+      // Geseran = memutar / menoleh, bukan memilih.
       if (moved) return;
-      // Shift + klik dipakai untuk menoleh — jangan ubah seleksi elemen.
-      if (event.shiftKey) return;
       const activeTool = toolRef.current;
       if (activeTool === 'walk') return;
 
@@ -666,36 +672,68 @@ export default function ModelViewer({
       raycaster.setFromCamera(pointer, camera);
       const root = modelRootRef.current;
       const intersects = raycaster.intersectObjects(root ? [root] : scene.children, true);
-      const hit = intersects.find((i) => (i.object as THREE.Mesh).visible !== false) ?? intersects[0];
 
       if (activeTool === 'measure') {
+        const hit = intersects.find((i) => (i.object as THREE.Mesh).visible !== false) ?? intersects[0];
         if (hit) addMeasurePoint(hit.point.clone());
         return;
       }
 
-      // orbit / pan -> pilih elemen: beri kotak penanda, model lain dibiarkan
-      // utuh. Meredupkan yang lain hanya kalau tombol Isolate dinyalakan.
-      if (hit) {
-        const target = hit.object as THREE.Mesh;
-        const gid = (target.userData.globalId as string) || null;
-        selectedMeshRef.current = target;
-        if (isolateOnRef.current) {
-          if (modeRef.current === 'category') isolateByCategory(target);
-          else isolateGid(gid ?? '');
-        }
-        setSelected({
-          globalId: gid ?? '—',
-          category: categoryOf(target),
-          name: gid ? nameOf(gid) : null,
-          color: gid ? paintOf(gid) : null,
-        });
-        onElementSelect?.(gid);
-        const box = boxOfGid(gid ?? '', target);
-        showSelectionBox(box);
-        focusOnBox(box);
-      } else {
-        clearSelection();
+      // Semua objek yang tertembus sinar di titik ini, urut dari yang terdekat.
+      // Objek tersembunyi dilewati; satu elemen cuma dihitung sekali walaupun
+      // geometrinya terpecah beberapa mesh.
+      const candidates: THREE.Mesh[] = [];
+      const seen = new Set<string>();
+      for (const it of intersects) {
+        const mesh = it.object as THREE.Mesh;
+        if (mesh.visible === false) continue;
+        const key = (mesh.userData.globalId as string) || `#${mesh.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(mesh);
       }
+
+      if (candidates.length === 0) {
+        pickRef.current = null;
+        clearSelection();
+        return;
+      }
+
+      // Shift + klik DI TITIK YANG SAMA = maju ke objek berikutnya di belakang
+      // yang sekarang. Ini jalan keluar saat objek yang diincar terhalang objek
+      // lain (sering: elemen besar tak terlihat yang menutupi kolom).
+      //
+      // Aman berdampingan dengan "Shift + geser = menoleh": yang itu berakhir
+      // dengan moved = true dan sudah keluar di baris pertama.
+      const prev = pickRef.current;
+      const samePoint =
+        prev && Math.abs(prev.x - event.clientX) <= 8 && Math.abs(prev.y - event.clientY) <= 8;
+      const index = event.shiftKey && samePoint ? (prev!.index + 1) % candidates.length : 0;
+
+      const target = candidates[index];
+      pickRef.current = { x: event.clientX, y: event.clientY, index };
+
+      const gid = (target.userData.globalId as string) || null;
+      selectedMeshRef.current = target;
+      if (isolateOnRef.current) {
+        if (modeRef.current === 'category') isolateByCategory(target);
+        else isolateGid(gid ?? '');
+      }
+      setSelected({
+        globalId: gid ?? '—',
+        category: categoryOf(target),
+        name: gid ? nameOf(gid) : null,
+        color: gid ? paintOf(gid) : null,
+        pickIndex: index + 1,
+        pickCount: candidates.length,
+      });
+      onElementSelect?.(gid);
+      const box = boxOfGid(gid ?? '', target);
+      showSelectionBox(box);
+      // Objek yang dipilih lewat Shift sengaja tidak memicu kamera bergerak —
+      // user sedang memilah di titik yang sama, kamera bergeser malah bikin
+      // titik itu meleset dari kursor.
+      if (!event.shiftKey) focusOnBox(box);
     }
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
@@ -1074,6 +1112,7 @@ export default function ModelViewer({
   function clearSelection() {
     resetIsolation();
     selectedMeshRef.current = null;
+    pickRef.current = null;
     setSelected(null);
     showSelectionBox(null);
     onElementSelect?.(null);
@@ -1898,7 +1937,22 @@ export default function ModelViewer({
             <span className="truncate font-medium" title={selected.category ?? t.noCategory}>
               {selected.category ?? t.noCategory}
             </span>
-            <span className="ml-auto shrink-0 text-[9px] opacity-40" title={selected.globalId}>
+            {/* Masih ada objek lain di titik klik yang sama — beri tahu, kalau
+                tidak user tidak akan tahu Shift bisa menembusnya. */}
+            {selected.pickCount != null && selected.pickCount > 1 && (
+              <span
+                className="ml-auto shrink-0 rounded bg-white/15 px-1 text-[9px] text-white/80"
+                title={t.pickCycle}
+              >
+                {selected.pickIndex}/{selected.pickCount} ⇧
+              </span>
+            )}
+            <span
+              className={`shrink-0 text-[9px] opacity-40 ${
+                selected.pickCount != null && selected.pickCount > 1 ? '' : 'ml-auto'
+              }`}
+              title={selected.globalId}
+            >
               {selected.globalId}
             </span>
           </div>

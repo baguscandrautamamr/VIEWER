@@ -2,7 +2,7 @@ export const locales = {
   id: {
     viewer: {
       resetView: 'Reset',
-      isolateHint: 'Klik objek untuk memilih — kotak penanda muncul, model lain tetap utuh',
+      isolateHint: 'Klik objek untuk memilih · Shift + klik di titik yang sama = objek di baliknya',
       liveUpdate: 'Versi terbaru diterima, memperbarui tampilan...',
       downloadRvt: 'Unduh File Revit',
       modeObject: 'Objek',
@@ -37,7 +37,7 @@ export const locales = {
       lock: 'Diam',
       lockHint: 'Kunci putaran — model tidak berputar. Tahan klik kiri + geser untuk melihat sekeliling; Shift + roda tengah untuk memutar model.',
       lockOnHint: 'Mode diam — tahan klik kiri & geser untuk lihat sekeliling',
-      shiftKeys: 'Shift: roda tengah = putar · scroll = lihat atas/bawah · klik kiri geser = lihat kiri/kanan',
+      shiftKeys: 'Shift: roda tengah = putar · scroll = lihat atas/bawah · klik kiri geser = lihat kiri/kanan · klik kiri tanpa geser = pilih objek di baliknya',
       shortcuts: 'Pintasan',
       display: 'Tampilan',
       brightness: 'Kecerahan',
@@ -46,6 +46,7 @@ export const locales = {
       bgLight: 'Terang',
       bgWhite: 'Putih',
       bgDark: 'Gelap',
+      pickCycle: 'Ada beberapa objek bertumpuk di titik ini. Shift + klik di titik yang sama untuk pindah ke objek di baliknya.',
       color: 'Warna',
       colorReset: 'Kembalikan warna asli',
       hideObject: 'Sembunyikan',
@@ -144,7 +145,7 @@ export const locales = {
   en: {
     viewer: {
       resetView: 'Reset',
-      isolateHint: 'Click an object to select — a box marks it, the rest of the model stays intact',
+      isolateHint: 'Click an object to select · Shift + click the same spot = the object behind it',
       liveUpdate: 'New version received, updating view...',
       downloadRvt: 'Download Revit File',
       modeObject: 'Object',
@@ -179,7 +180,7 @@ export const locales = {
       lock: 'Static',
       lockHint: 'Lock rotation — the model no longer spins. Hold left click and drag to look around; Shift + middle wheel rotates the model.',
       lockOnHint: 'Static mode — hold left click and drag to look around',
-      shiftKeys: 'Shift: middle wheel = rotate · scroll = look up/down · left drag = look left/right',
+      shiftKeys: 'Shift: middle wheel = rotate · scroll = look up/down · left drag = look left/right · left click without dragging = pick the object behind',
       shortcuts: 'Shortcuts',
       display: 'Display',
       brightness: 'Brightness',
@@ -188,6 +189,7 @@ export const locales = {
       bgLight: 'Light',
       bgWhite: 'White',
       bgDark: 'Dark',
+      pickCycle: 'Several objects overlap at this spot. Shift + click the same spot to step to the one behind.',
       color: 'Color',
       colorReset: 'Restore original color',
       hideObject: 'Hide',

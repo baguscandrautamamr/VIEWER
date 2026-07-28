@@ -63,6 +63,7 @@ npm start        # jalankan hasil build
 |---|---|
 | Klik kiri + geser | Putar model (orbit) |
 | Klik kiri (tanpa geser) | Pilih elemen — kotak batas, model lain tetap utuh |
+| **Shift + klik kiri (tanpa geser)** | Pilih objek di **balik** objek yang sekarang |
 | Scroll | Zoom |
 | **Klik kiri + geser** (mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
 | **Shift + roda tengah + geser** | Putar model (orbit) |
@@ -87,6 +88,11 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   model lain **tetap utuh**, jadi konteks sekelilingnya masih terlihat (gaya
   Navisworks). Kotaknya meliputi seluruh elemen, termasuk elemen yang
   geometrinya terpecah beberapa bagian.
+- **Shift + klik = tembus objek bertumpuk** — kalau yang kena klik bukan objek
+  yang Anda incar (sering terjadi: ada elemen lain di depannya), tekan **Shift +
+  klik di titik yang sama** untuk maju ke objek di belakangnya, berulang sampai
+  ketemu. Kotak objek terpilih menampilkan penanda **2/5 ⇧** kalau di titik itu
+  ada beberapa objek bertumpuk. Kamera sengaja tidak bergerak saat memilah.
 - **Auto-fokus yang tahu diri** — kamera **diam** kalau elemen yang dipilih
   sudah kelihatan jelas (lebih dari 25% tinggi layar dan ada di dalam layar).
   Kamera baru meluncur mendekat kalau elemen tampil kecil atau berada di luar

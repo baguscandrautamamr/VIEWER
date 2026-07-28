@@ -1018,11 +1018,24 @@ export default function ModelViewer({
     if (!camera || !controls) return;
     const box = new THREE.Box3().setFromObject(mesh);
     if (box.isEmpty()) return;
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    // Jangan mepet sampai menembus bidang near saat objeknya kecil sekali.
-    const dist = Math.max(maxDim * 2.5, camera.near * 20);
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const center = sphere.center.clone();
+
+    // Jarak supaya objek pas di layar. Dihitung dari FOV & aspect (bola
+    // pembatas, jadi tidak tergantung arah objek menghadap) — bukan kelipatan
+    // ukuran objek. Rumus lama `maxDim * 2.5` justru ZOOM OUT untuk objek besar:
+    // atap yang membentang 60 m membuat kamera ditarik ke 150 m, lebih jauh
+    // daripada posisi user sebelum mengklik.
+    const vFov = (camera.fov * Math.PI) / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+    const fit = (sphere.radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.15;
+
+    // Klik objek harus MENDEKAT, tidak pernah menjauh: jarak dibatasi jarak
+    // kamera sekarang. Untuk objek raksasa hasilnya kamera tinggal berpindah
+    // pusat ke objek itu (seperti pan), bukan melompat mundur.
+    const current = camera.position.distanceTo(controls.target);
+    const dist = Math.max(Math.min(fit, current), camera.near * 20);
+
     // Arah pandang DIPERTAHANKAN — kamera cuma meluncur mendekat dari sisi yang
     // sedang dilihat. Kalau arahnya ikut dipaksa ke isometrik, tiap klik
     // membuat pandangan berputar dan orientasi user hilang.

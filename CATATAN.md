@@ -88,6 +88,10 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Fix: klik objek besar malah zoom OUT.** Jarak fokus dulu `maxDim * 2.5`,
+  jadi atap 60 m menarik kamera ke 150 m — lebih jauh dari posisi user. Sekarang
+  jarak dihitung dari FOV + aspect (bola pembatas) dan **dibatasi jarak kamera
+  saat itu**, sehingga klik objek tidak pernah menjauh
 - **Fix: fitting cable tray (tee/bend) tampil "Tanpa kategori".** Objeknya di
   GLB dinamai ANGKA — itu ElementId Revit, bukan GlobalId — jadi pencarian ke
   tabel `elements` meleset. Dijodohkan lewat ekor Name IFC
@@ -291,13 +295,23 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     Jaraknya juga dibatasi `camera.near * 20` supaya objek kecil tidak tembus
     bidang near.
 
-19. **Warna manual hidup di `restoreMesh()`, bukan di pemanggilnya.** Kalau
+19. **Jarak fokus harus dihitung dari FOV, dan tidak boleh melebihi jarak
+    kamera saat itu.** `maxDim * 2.5` terlihat masuk akal untuk elemen kecil,
+    tapi untuk objek besar (atap/lantai/dinding yang membentang sepanjang gedung)
+    hasilnya kamera **mundur** — klik atap 60 m menaruh kamera di 150 m,
+    padahal user cuma 40 m dari model, jadi terasa seperti zoom out. Sekarang:
+    jarak pas dihitung dari bola pembatas + FOV/aspect, lalu diambil yang
+    terkecil antara itu dan jarak kamera sekarang (`Math.min(fit, current)`),
+    dengan batas bawah `camera.near * 20`. Bola pembatas dipakai supaya hasilnya
+    tidak berubah-ubah tergantung arah objek menghadap.
+
+20. **Warna manual hidup di `restoreMesh()`, bukan di pemanggilnya.** Kalau
     warna dipasang langsung ke mesh, isolate akan menghapusnya (isolate memanggil
     `restoreMesh` yang mengembalikan material asli). Karena itu `colorMatByGid`
     dibaca **di dalam** `restoreMesh`: material warna dulu, material asli kalau
     tidak ada. Materialnya juga di-dispose saat model diganti di `loadModel`.
 
-20. **"Kosongkan" cukup menandai KATEGORI, bukan puluhan ribu GlobalId.** Di
+21. **"Kosongkan" cukup menandai KATEGORI, bukan puluhan ribu GlobalId.** Di
     panel Struktur elemen sudah terhitung tersembunyi kalau kategorinya
     tersembunyi (`hiddenIds.has(...) || catHidden`), jadi `hideAll()` mengisi
     `hiddenCategories` saja dan mengosongkan `hiddenIds` — sekali kategori
@@ -305,18 +319,18 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     22 ribu id tidak salah, tapi mubazir dan bikin sekali centang kategori tidak
     memunculkan apa-apa.
 
-21. **Objek yang disembunyikan wajib punya jalan pulang.** Tombol "Sembunyikan
+22. **Objek yang disembunyikan wajib punya jalan pulang.** Tombol "Sembunyikan
     objek" memakai `setElementVisible()` yang sama dengan checkbox, jadi
     centangnya ikut lepas di panel Struktur dan bisa dikembalikan dari sana atau
     lewat "☑ Semua". Isolate ikut dilepas — kalau tidak, yang tersisa di layar
     cuma model redup tanpa objek yang jadi pusat perhatian. Pesan singkat di
     kanan bawah memberitahu cara mengembalikannya.
 
-22. **Kotak "Selected" dan panel Struktur sama-sama di kiri.** Kotak info harus
+23. **Kotak "Selected" dan panel Struktur sama-sama di kiri.** Kotak info harus
     ikut bergeser (`left: treeOpen ? '17rem' : '0.75rem'`, sama seperti dock),
     kalau tidak dia tertutup panel saat panel dibuka.
 
-23. **Sumbu Three.js ≠ sumbu Revit. Y-up vs Z-up.** glTF/GLB wajib Y-up, jadi
+24. **Sumbu Three.js ≠ sumbu Revit. Y-up vs Z-up.** glTF/GLB wajib Y-up, jadi
     IfcConvert memutar model saat convert: yang di Revit sumbu **Z (tinggi)**
     menjadi **y** di scene, dan Y mendatar Revit menjadi **z**. Selisih sumbu di
     tool Ukur karena itu dipetakan `X = |dx|`, `Y = |dz|`, `Z = |dy|` — kalau
@@ -324,7 +338,7 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     membingungkan orang yang terbiasa Revit. Tandanya dibuang (nilai mutlak),
     jadi arah putaran Y vs −Y tidak perlu dipusingkan.
 
-24. **Tidak semua objek GLB dinamai GlobalId — sebagian bernama ANGKA.** Itu
+25. **Tidak semua objek GLB dinamai GlobalId — sebagian bernama ANGKA.** Itu
     ElementId Revit. Gejalanya: sebagian besar model bernama benar, tapi
     segelintir elemen (sering fitting seperti tee/bend cable tray) tetap
     "Tanpa kategori" walaupun tabel `elements` sudah penuh dan parser IFC-nya
@@ -338,7 +352,7 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     pencarian GlobalId meleset. Kunci sepanjang 22 karakter dikecualikan
     (`altKeyOf`) supaya GUID yang kebetulan diawali angka tidak salah jodoh.
 
-25. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+26. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

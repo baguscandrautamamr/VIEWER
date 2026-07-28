@@ -125,6 +125,9 @@ export const locales = {
       importDone: 'Selesai ✓ {n} elemen, {c} kategori tersimpan.',
       importNoElements: 'Tidak ada elemen ber-GlobalId ketemu. Pastikan file .ifc benar.',
       importPickFile: 'Pilih file .ifc dulu.',
+      importSaved: 'Tersimpan: {n} nama elemen.',
+      importSavedHint:
+        'Kalau di viewer masih ada elemen tanpa nama (kategori "Default"), berarti file IFC itu belum mencakup semuanya — impor file IFC disiplin lain (mis. elektrikal), datanya akan ditambahkan, bukan menimpa.',
     },
     ui: { lang: 'EN', theme: 'Tema', language: 'Bahasa' },
   },
@@ -254,6 +257,9 @@ export const locales = {
       importDone: 'Done ✓ {n} elements, {c} categories saved.',
       importNoElements: 'No elements with a GlobalId found. Check the .ifc file.',
       importPickFile: 'Pick a .ifc file first.',
+      importSaved: 'Stored: {n} element names.',
+      importSavedHint:
+        'If the viewer still shows unnamed elements (category "Default"), that IFC does not cover them all — import the other discipline\'s IFC (e.g. electrical); data is added, not replaced.',
     },
     ui: { lang: 'ID', theme: 'Theme', language: 'Language' },
   },

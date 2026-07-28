@@ -20,6 +20,8 @@ export interface ImportStrings {
   done: string;
   noElements: string;
   pickFile: string;
+  saved: string;
+  savedHint: string;
 }
 
 // Kirim per batch supaya request tidak kebesaran untuk model dengan puluhan
@@ -30,9 +32,11 @@ const READ_CHUNK = 4 * 1024 * 1024;
 
 export default function ImportElements({
   projectId,
+  savedCount,
   strings,
 }: {
   projectId: string;
+  savedCount: number;
   strings: ImportStrings;
 }) {
   const router = useRouter();
@@ -92,7 +96,17 @@ export default function ImportElements({
   return (
     <div className="mb-4 rounded-lg border border-foreground/10 p-4">
       <h2 className="mb-1 text-sm font-medium">{strings.title}</h2>
-      <p className="mb-3 text-xs opacity-60">{strings.hint}</p>
+      <p className="mb-2 text-xs opacity-60">{strings.hint}</p>
+      {/* Jumlah yang tersimpan — supaya kelihatan kalau IFC yang diimpor cuma
+          menutupi sebagian model (mis. arsitektur saja, elektrikal belum). */}
+      {savedCount > 0 && (
+        <p className="mb-3 text-xs">
+          <span className="opacity-60">
+            {strings.saved.replace('{n}', savedCount.toLocaleString())}
+          </span>{' '}
+          <span className="opacity-45">{strings.savedHint}</span>
+        </p>
+      )}
       <input
         ref={fileRef}
         type="file"

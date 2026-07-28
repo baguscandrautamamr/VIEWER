@@ -103,8 +103,10 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   mirip Revit. Pilihan tersimpan di browser.
 - **Pintasan (?)** — daftar lengkap pintasan keyboard & mouse.
 - **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
-  titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
-  kamera digerakkan.
+  titik di 3D. Begitu titik kedua diklik, **selisih per sumbu X / Y / Z** ikut
+  tampil di bawah angka jaraknya — **Z = tinggi** (naik/turun), X & Y mendatar,
+  mengikuti kebiasaan Revit. Ukuran titik konstan di layar; label jarak tetap
+  menempel saat kamera digerakkan.
 - **Layar penuh (⛶)** — perbesar viewer ke seluruh layar; dock & panel ikut
   tampil. Tekan lagi atau `Esc` untuk keluar.
 - **Diam** — kunci putaran supaya model tidak berputar tak sengaja saat

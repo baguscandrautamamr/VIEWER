@@ -1,6 +1,6 @@
 # Revit Web Viewer
 
-Website presentasi client: 3D view dari Revit (isolate-on-click), sheet PDF,
+Website presentasi client: 3D view dari Revit (pilih elemen, isolate, ukur), sheet PDF,
 auto-update saat model di-push, download file RVT.
 
 Spec lengkap: lihat `REVIT-WEB-VIEWER-SETUP.md`.
@@ -62,7 +62,7 @@ npm start        # jalankan hasil build
 | Input | Fungsi |
 |---|---|
 | Klik kiri + geser | Putar model (orbit) |
-| Klik kiri (tanpa geser) | Pilih & isolate elemen |
+| Klik kiri (tanpa geser) | Pilih elemen — kotak batas, model lain tetap utuh |
 | Scroll | Zoom |
 | **Klik kiri + geser** (mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
 | **Shift + roda tengah + geser** | Putar model (orbit) |
@@ -79,14 +79,23 @@ berbeda dengan orbit yang mengelilingi model.
 Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 
 - **Struktur (☰)** — Selection Tree hierarki *Kategori → Elemen*. Checkbox
-  untuk show/hide per kategori/elemen, klik nama untuk isolate + fokus, ada
+  untuk show/hide per kategori/elemen, klik nama untuk memilih + fokus, ada
   kolom cari. Di kepala panel ada **☑ Semua** dan **☐ Kosongkan** —
   "Kosongkan" menyembunyikan semuanya supaya tinggal mencentang satu kategori
   yang mau dilihat (cara tercepat mengisolasi satu disiplin).
-- **Auto-fokus** — klik objek di 3D (atau nama di panel Struktur), kamera
-  meluncur halus mendekat: beranimasi, bukan melompat, dan arah pandang
-  dipertahankan. Animasi berhenti begitu mouse/keyboard disentuh. Selalu aktif,
-  tidak ada tombolnya.
+- **Pilih elemen** — klik objek di 3D: elemen ditandai **kotak batas** dan
+  model lain **tetap utuh**, jadi konteks sekelilingnya masih terlihat (gaya
+  Navisworks). Kotaknya meliputi seluruh elemen, termasuk elemen yang
+  geometrinya terpecah beberapa bagian.
+- **Auto-fokus yang tahu diri** — kamera **diam** kalau elemen yang dipilih
+  sudah kelihatan jelas (lebih dari 25% tinggi layar dan ada di dalam layar).
+  Kamera baru meluncur mendekat kalau elemen tampil kecil atau berada di luar
+  layar — misalnya saat dipilih dari panel Struktur. Gerakannya beranimasi,
+  arah pandang dipertahankan, dan berhenti begitu mouse/keyboard disentuh.
+  Tombol **Fokus** memaksa kamera mendekat ke elemen terpilih kapan pun.
+- **Isolate** — **bawaannya mati**. Nyalakan kalau memang ingin semua objek lain
+  diredupkan saat satu objek dipilih (per objek atau per kategori); berlaku
+  langsung ke elemen yang sedang terpilih.
 - **Objek terpilih** — kotak ringkas di kiri bawah: kategori, nama, GlobalId,
   **palet warna** (↺ mengembalikan warna asli) dan tombol **Sembunyikan**.
   Warna bertahan walaupun isolate dipakai. Keduanya **sementara** — hanya di
@@ -113,10 +122,10 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   presentasi. Klik kiri berhenti memutar (seleksi elemen tetap jalan), inersia
   dimatikan sehingga berhenti seketika. Sebagai gantinya **tahan klik kiri +
   geser** untuk melihat sekeliling secara perlahan (kiri/kanan & atas/bawah);
-  klik tanpa geser tetap memilih/isolate elemen. Zoom, geser, dan keyboard
+  klik tanpa geser tetap memilih elemen. Zoom, geser, dan keyboard
   tetap berfungsi; memutar model tetap bisa lewat **Shift + roda tengah**.
-- Ditambah fitur lama: Isolate (objek/kategori), Section box (6 slider),
-  Coret markup, Fokus, auto-update saat model di-push.
+- Ditambah fitur lama: Section box (6 slider), Coret markup, Fokus,
+  auto-update saat model di-push.
 
 ## Setup database
 

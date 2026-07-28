@@ -2,7 +2,7 @@ export const locales = {
   id: {
     viewer: {
       resetView: 'Reset',
-      isolateHint: 'Klik object untuk isolate',
+      isolateHint: 'Klik objek untuk memilih — kotak penanda muncul, model lain tetap utuh',
       liveUpdate: 'Versi terbaru diterima, memperbarui tampilan...',
       downloadRvt: 'Unduh File Revit',
       modeObject: 'Objek',
@@ -14,6 +14,7 @@ export const locales = {
       loadError: 'Gagal memuat model. Coba refresh halaman.',
       section: 'Section',
       isolate: 'Isolate',
+      isolateTip: 'Redupkan semua objek lain saat satu objek dipilih',
       markup: 'Coret',
       markupFrozen: 'Mode coret — putaran 3D dibekukan',
       // Tool navigasi & anotasi (mirip Navisworks)
@@ -143,7 +144,7 @@ export const locales = {
   en: {
     viewer: {
       resetView: 'Reset',
-      isolateHint: 'Click an object to isolate',
+      isolateHint: 'Click an object to select — a box marks it, the rest of the model stays intact',
       liveUpdate: 'New version received, updating view...',
       downloadRvt: 'Download Revit File',
       modeObject: 'Object',
@@ -155,6 +156,7 @@ export const locales = {
       loadError: 'Failed to load model. Try refreshing the page.',
       section: 'Section',
       isolate: 'Isolate',
+      isolateTip: 'Dim every other object when one is selected',
       markup: 'Markup',
       markupFrozen: 'Markup mode — 3D orbit is frozen',
       // Navigation & annotation tools (Navisworks-like)

@@ -53,7 +53,7 @@ Website presentasi model Revit ke client:
 | Input | Fungsi |
 |---|---|
 | Klik kiri + geser | Putar model (orbit) |
-| Klik kiri (tanpa geser) | Pilih & isolate elemen |
+| Klik kiri (tanpa geser) | Pilih elemen — kotak penanda; model lain tetap utuh |
 | Scroll | Zoom |
 | **Klik kiri + geser** (saat mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
 | **Shift + klik kiri + geser** | Lihat kiri/kanan |
@@ -70,14 +70,18 @@ Website presentasi model Revit ke client:
 - **Struktur (☰)** — pohon Kategori → Elemen, checkbox show/hide, kolom cari,
   klik nama = isolate + fokus, tombol **☑ Semua** & **☐ Kosongkan** di kepala panel
 - **Putar / Geser / Ukur / Walkthrough** — dock kiri
-- **Auto-fokus** — klik objek = kamera beranimasi mendekat (selalu aktif, tanpa tombol)
+- **Auto-fokus** — kamera DIAM kalau elemen sudah kelihatan jelas (≥25% tinggi
+  layar & di dalam layar); mendekat beranimasi kalau tampil kecil atau di luar
+  layar. Tombol **Fokus** memaksa mendekat ke elemen terpilih
 - **Kotak objek terpilih** — kategori/nama/GlobalId + palet warna (↺ reset) +
   Sembunyikan. Ringkas satu baris. Sementara, tidak masuk database
 - **Kecepatan (⚡)** — slider 0.1×–3× untuk gerak keyboard & walkthrough
 - **Tampilan (💡)** — kecerahan 0.4×–2.5× + warna latar (tema/terang/putih/gelap)
 - **Pintasan (?)** — daftar pintasan keyboard & mouse
 - **Layar penuh (⛶)** — viewer + semua overlay jadi layar penuh
-- **Isolate** (Objek / Kategori), **Fokus**, **Diam**, **Section**, **Coret**, **Reset**
+- **Isolate** (Objek / Kategori) — **bawaannya MATI**; nyalakan kalau ingin objek
+  lain diredupkan saat satu objek dipilih. **Fokus**, **Diam**, **Section**,
+  **Coret**, **Reset**
 - **Section box** — 6 slider (X+/X−, Y+/Y−, Z+/Z−) + Reset
 - **Markup** — pena, panah, teks (diketik langsung di kanvas), undo, hapus, simpan PNG
 
@@ -88,6 +92,14 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Klik objek jadi mirip Navisworks.** Tiga perubahan sekaligus:
+  (1) kamera **diam** kalau elemen sudah kelihatan jelas — mendekat hanya kalau
+  elemen tampil kecil (<25% tinggi layar) atau di luar layar; (2) elemen
+  terpilih ditandai **kotak batas** dan model lain **tidak lagi diredupkan**
+  (Isolate jadi pilihan, bawaannya mati); (3) **isolate & kotak kini per ELEMEN,
+  bukan per mesh** — elemen yang terpecah jadi beberapa primitive (beda
+  material) dulu cuma menyala sebagian, dan potongan bersuffix `_1` gagal
+  dicari namanya sehingga ikut tampil "Tanpa kategori"
 - **Fix: klik objek besar malah zoom OUT.** Jarak fokus dulu `maxDim * 2.5`,
   jadi atap 60 m menarik kamera ke 150 m — lebih jauh dari posisi user. Sekarang
   jarak dihitung dari FOV + aspect (bola pembatas) dan **dibatasi jarak kamera
@@ -305,13 +317,40 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     dengan batas bawah `camera.near * 20`. Bola pembatas dipakai supaya hasilnya
     tidak berubah-ubah tergantung arah objek menghadap.
 
-20. **Warna manual hidup di `restoreMesh()`, bukan di pemanggilnya.** Kalau
+20. **"Sudah dekat" harus diukur dari besarnya di LAYAR, bukan dari jarak.**
+    Jarak 10 m itu dekat untuk atap tapi jauh untuk sekrup, jadi ambang berupa
+    meter selalu salah untuk salah satu pihak. `isWellVisible()` memakai dua
+    syarat: elemen ada di dalam frustum kamera **dan** tingginya di layar
+    melewati `MIN_SCREEN_COVERAGE` (jari-jari bola ÷ separuh tinggi layar pada
+    jarak itu). Frustum-nya perlu, karena elemen raksasa di belakang kamera
+    "besar" secara hitungan tapi tidak kelihatan sama sekali.
+
+21. **Satu elemen bisa jadi BEBERAPA mesh Three.js.** Kalau geometrinya punya
+    lebih dari satu material, GLTFLoader membuat satu Mesh per primitive dan
+    menamainya lewat `createUniqueName` → `GUID`, `GUID_1`, `GUID_2`
+    (`GLTFLoader.js`, `mesh.name = parser.createUniqueName(...)`). Akibatnya dulu
+    isolate cuma menyalakan potongan yang kena klik, dan potongan bersuffix
+    gagal dicari namanya. `normalizeMeshId()` membuang akhiran `_N` — tapi hanya
+    kalau sisanya masuk akal sebagai id (22 karakter = GlobalId, atau semua
+    angka = ElementId), supaya GlobalId yang kebetulan berakhiran `_1` tidak
+    ikut terpotong. Semua operasi per elemen memakai `forEachMeshOfGid()`.
+
+22. **Penanda seleksi ditaruh di SCENE, bukan di dalam model.** `Box3Helper`
+    ditambahkan ke `scene`, jadi otomatis luput dari raycast (yang menembak
+    `modelRoot`) dan dari `forEachMesh` (yang menelusuri `modelRoot`). Kalau
+    ditaruh di dalam model, kotaknya bisa ikut terpilih, ikut diredupkan
+    isolate, dan ikut terhitung di Selection Tree. Materialnya `depthTest:
+    false` supaya kotak tetap terlihat walau elemennya di balik dinding.
+    Kotaknya masih ikut terpotong section box — itu konsekuensi
+    `renderer.clippingPlanes` yang global (lihat poin 11).
+
+23. **Warna manual hidup di `restoreMesh()`, bukan di pemanggilnya.** Kalau
     warna dipasang langsung ke mesh, isolate akan menghapusnya (isolate memanggil
     `restoreMesh` yang mengembalikan material asli). Karena itu `colorMatByGid`
     dibaca **di dalam** `restoreMesh`: material warna dulu, material asli kalau
     tidak ada. Materialnya juga di-dispose saat model diganti di `loadModel`.
 
-21. **"Kosongkan" cukup menandai KATEGORI, bukan puluhan ribu GlobalId.** Di
+24. **"Kosongkan" cukup menandai KATEGORI, bukan puluhan ribu GlobalId.** Di
     panel Struktur elemen sudah terhitung tersembunyi kalau kategorinya
     tersembunyi (`hiddenIds.has(...) || catHidden`), jadi `hideAll()` mengisi
     `hiddenCategories` saja dan mengosongkan `hiddenIds` — sekali kategori
@@ -319,18 +358,18 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     22 ribu id tidak salah, tapi mubazir dan bikin sekali centang kategori tidak
     memunculkan apa-apa.
 
-22. **Objek yang disembunyikan wajib punya jalan pulang.** Tombol "Sembunyikan
+25. **Objek yang disembunyikan wajib punya jalan pulang.** Tombol "Sembunyikan
     objek" memakai `setElementVisible()` yang sama dengan checkbox, jadi
     centangnya ikut lepas di panel Struktur dan bisa dikembalikan dari sana atau
     lewat "☑ Semua". Isolate ikut dilepas — kalau tidak, yang tersisa di layar
     cuma model redup tanpa objek yang jadi pusat perhatian. Pesan singkat di
     kanan bawah memberitahu cara mengembalikannya.
 
-23. **Kotak "Selected" dan panel Struktur sama-sama di kiri.** Kotak info harus
+26. **Kotak "Selected" dan panel Struktur sama-sama di kiri.** Kotak info harus
     ikut bergeser (`left: treeOpen ? '17rem' : '0.75rem'`, sama seperti dock),
     kalau tidak dia tertutup panel saat panel dibuka.
 
-24. **Sumbu Three.js ≠ sumbu Revit. Y-up vs Z-up.** glTF/GLB wajib Y-up, jadi
+27. **Sumbu Three.js ≠ sumbu Revit. Y-up vs Z-up.** glTF/GLB wajib Y-up, jadi
     IfcConvert memutar model saat convert: yang di Revit sumbu **Z (tinggi)**
     menjadi **y** di scene, dan Y mendatar Revit menjadi **z**. Selisih sumbu di
     tool Ukur karena itu dipetakan `X = |dx|`, `Y = |dz|`, `Z = |dy|` — kalau
@@ -338,7 +377,7 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     membingungkan orang yang terbiasa Revit. Tandanya dibuang (nilai mutlak),
     jadi arah putaran Y vs −Y tidak perlu dipusingkan.
 
-25. **Tidak semua objek GLB dinamai GlobalId — sebagian bernama ANGKA.** Itu
+28. **Tidak semua objek GLB dinamai GlobalId — sebagian bernama ANGKA.** Itu
     ElementId Revit. Gejalanya: sebagian besar model bernama benar, tapi
     segelintir elemen (sering fitting seperti tee/bend cable tray) tetap
     "Tanpa kategori" walaupun tabel `elements` sudah penuh dan parser IFC-nya
@@ -352,7 +391,7 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     pencarian GlobalId meleset. Kunci sepanjang 22 karakter dikecualikan
     (`altKeyOf`) supaya GUID yang kebetulan diawali angka tidak salah jodoh.
 
-26. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+29. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

@@ -41,6 +41,21 @@ const FLY_DURATION = 0.6;
 const MIN_SCREEN_COVERAGE = 0.25;
 // Warna kotak penanda elemen terpilih.
 const SELECTION_BOX_COLOR = 0x22d3ee;
+// Di bawah opacity ini sebuah objek dianggap "tembus pandang": masih bisa
+// dipilih, tapi tidak boleh merebut klik dari objek padat di belakangnya.
+const SHEER_OPACITY = 0.35;
+// Kategori yang bukan benda fisik (garis grid, volume ruang, bukaan, anotasi).
+// Geometrinya ikut terekspor ke GLB dan menghalangi klik, padahal di layar
+// nyaris tak terlihat — jadi diperlakukan sama seperti objek tembus pandang:
+// boleh dipilih, tapi paling belakang. Nama kategorinya diisi parser IFC
+// (`scripts/lib/ifc-elements.mjs`, konstanta NON_PHYSICAL).
+const NON_PHYSICAL_CATEGORIES = new Set([
+  'IFCSPACE',
+  'IFCOPENINGELEMENT',
+  'IFCANNOTATION',
+  'IFCGRID',
+  'IFCGRIDAXIS',
+]);
 // Sensitivitas menoleh (radian per piksel geseran mouse).
 const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
 const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
@@ -682,16 +697,26 @@ export default function ModelViewer({
       // Semua objek yang tertembus sinar di titik ini, urut dari yang terdekat.
       // Objek tersembunyi dilewati; satu elemen cuma dihitung sekali walaupun
       // geometrinya terpecah beberapa mesh.
-      const candidates: THREE.Mesh[] = [];
+      //
+      // Objek PADAT diutamakan, objek tembus pandang ditaruh di belakang. Sinar
+      // raycaster tidak peduli material: elemen kaca/volume ruang yang di layar
+      // hampir tidak terlihat tetap tertembus lebih dulu dan "memakan" klik
+      // yang sebenarnya diarahkan ke kolom di belakangnya. Yang benar-benar
+      // tidak terlihat (opacity ~0) tidak bisa diklik sama sekali.
+      const solid: THREE.Mesh[] = [];
+      const sheer: THREE.Mesh[] = [];
       const seen = new Set<string>();
       for (const it of intersects) {
         const mesh = it.object as THREE.Mesh;
         if (mesh.visible === false) continue;
         const key = (mesh.userData.globalId as string) || `#${mesh.id}`;
         if (seen.has(key)) continue;
+        const weight = pickWeight(mesh);
+        if (weight === 0) continue; // tak terlihat sama sekali — jangan bisa diklik
         seen.add(key);
-        candidates.push(mesh);
+        (weight === 2 ? solid : sheer).push(mesh);
       }
+      const candidates = [...solid, ...sheer];
 
       if (candidates.length === 0) {
         pickRef.current = null;
@@ -1245,6 +1270,30 @@ export default function ModelViewer({
     camera.updateProjectionMatrix();
     controls.target.set(0, 0, 0);
     controls.update();
+  }
+
+  // Seberapa layak sebuah mesh "dimaksud" saat diklik, dinilai dari material
+  // ASLINYA (bukan material saat ini — isolate menggantinya dengan material
+  // redup yang transparan, dan itu bukan cerminan tampilan model sebenarnya):
+  //   2 = padat, inilah yang biasanya dimaksud user
+  //   1 = tembus pandang (kaca, volume ruang) — masih bisa dipilih, tapi
+  //       belakangan, jangan sampai merebut klik dari objek padat di belakangnya
+  //   0 = tidak terlihat sama sekali -> tidak bisa diklik
+  function pickWeight(mesh: THREE.Mesh): 0 | 1 | 2 {
+    const cat = categoryOf(mesh);
+    if (cat && NON_PHYSICAL_CATEGORIES.has(cat.toUpperCase())) return 1;
+    const source = originalMaterials.current.get(mesh) ?? mesh.material;
+    const mats = Array.isArray(source) ? source : [source];
+    let best: 0 | 1 | 2 = 0;
+    for (const m of mats) {
+      if (!m || m.visible === false) continue;
+      const mat = m as THREE.Material & { opacity?: number };
+      const opacity = mat.opacity ?? 1;
+      if (mat.transparent && opacity <= 0.02) continue; // tak terlihat
+      if (mat.transparent && opacity < SHEER_OPACITY) best = best === 2 ? 2 : 1;
+      else return 2;
+    }
+    return best;
   }
 
   // Satu elemen bisa jadi BEBERAPA mesh di Three.js: kalau geometrinya punya

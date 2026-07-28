@@ -86,6 +86,10 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   geser, **Q** naik, **E** turun, mouse lihat, **Esc** keluar.
 - **Kecepatan (⚡)** — slider di dock kiri untuk mengatur kecepatan gerak
   keyboard/walkthrough (0.1×–3×) supaya jalan di 3D tidak terlalu cepat.
+- **Tampilan (💡)** — atur **kecerahan** model (0.4×–2.5×) dan **warna latar**
+  (Ikut tema / Terang / Putih / Gelap). Pilih *Putih* kalau ingin tampilan
+  mirip Revit. Pilihan tersimpan di browser.
+- **Pintasan (?)** — daftar lengkap pintasan keyboard & mouse.
 - **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
   titik di 3D. Ukuran titik konstan di layar; label jarak tetap menempel saat
   kamera digerakkan.

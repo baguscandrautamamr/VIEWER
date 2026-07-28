@@ -80,7 +80,19 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
 
 - **Struktur (☰)** — Selection Tree hierarki *Kategori → Elemen*. Checkbox
   untuk show/hide per kategori/elemen, klik nama untuk isolate + fokus, ada
-  kolom cari.
+  kolom cari. Di kepala panel ada **☑ Semua** dan **☐ Kosongkan** —
+  "Kosongkan" menyembunyikan semuanya supaya tinggal mencentang satu kategori
+  yang mau dilihat (cara tercepat mengisolasi satu disiplin).
+- **Auto-fokus (🎯)** — klik objek di 3D, kamera meluncur halus mendekat
+  (beranimasi, bukan melompat). Bisa dimatikan lewat tombol ini kalau sedang
+  menjelaskan ke client dan kamera tidak boleh bergerak. Aktif secara bawaan.
+  Animasi berhenti begitu mouse/keyboard disentuh.
+- **Objek terpilih** — kotak kiri bawah menampilkan kategori, nama, dan
+  GlobalId, plus **palet warna** (tandai objek; ↺ mengembalikan warna asli) dan
+  **Sembunyikan objek**. Warna bertahan walaupun isolate dipakai. Keduanya
+  **sementara** — hanya di layar kamu, tidak tersimpan ke database, hilang saat
+  halaman di-refresh. Objek yang disembunyikan centangnya ikut lepas di panel
+  Struktur, jadi selalu bisa dikembalikan dari sana atau lewat **☑ Semua**.
 - **Putar / Geser (Pan) / Walkthrough** — tool navigasi. Pan = seret untuk
   menggeser; Walkthrough = jalan first-person: **W/S** maju-mundur, **A/D**
   geser, **Q** naik, **E** turun, mouse lihat, **Esc** keluar.

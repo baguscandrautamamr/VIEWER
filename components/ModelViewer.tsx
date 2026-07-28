@@ -27,7 +27,14 @@ type Tool = 'orbit' | 'pan' | 'measure' | 'walk';
 
 const DIMMED_OPACITY = 0.12;
 const HIGHLIGHT_DURATION_MS = 3000;
+const NOTICE_DURATION_MS = 5000;
 const DEFAULT_CATEGORY = 'Default';
+// Palet warna untuk menandai objek terpilih (merah…putih, urut seperti emoji
+// di dock). Sifatnya sementara — hanya di layar ini, tidak masuk database.
+const PAINT_COLORS = [0xef4444, 0xf97316, 0xeab308, 0x22c55e, 0x3b82f6, 0xa855f7, 0xffffff];
+// Lama animasi kamera mendekat ke objek (detik). Sengaja bukan lompatan:
+// kalau kamera melompat tiap klik, mata cepat lelah & kehilangan orientasi.
+const FLY_DURATION = 0.6;
 // Sensitivitas menoleh (radian per piksel geseran mouse).
 const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
 const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
@@ -81,6 +88,23 @@ export default function ModelViewer({
   const dimMaterialRef = useRef<THREE.Material | null>(null);
   // Mesh yang terakhir diklik.
   const selectedMeshRef = useRef<THREE.Mesh | null>(null);
+  // Warna manual per GlobalId. Materialnya dipegang di sini (bukan di mesh)
+  // supaya warnanya BERTAHAN saat isolate: `restoreMesh` mengembalikan material
+  // warna ini, bukan material asli, selama entri-nya masih ada.
+  const colorMatByGid = useRef<Map<string, THREE.MeshStandardMaterial>>(new Map());
+
+  // --- Auto-fokus & animasi kamera ---
+  // Dibaca di dalam handler klik yang dipasang sekali saat mount -> harus ref.
+  const autoFocusRef = useRef(true);
+  // Tween kamera yang sedang berjalan; dijalankan di animate loop, dibatalkan
+  // begitu user menyentuh mouse/keyboard supaya tidak berebut kendali.
+  const flyRef = useRef<{
+    fromPos: THREE.Vector3;
+    toPos: THREE.Vector3;
+    fromTarget: THREE.Vector3;
+    toTarget: THREE.Vector3;
+    t: number;
+  } | null>(null);
 
   // --- Tool aktif ---
   const toolRef = useRef<Tool>('orbit');
@@ -131,6 +155,7 @@ export default function ModelViewer({
     globalId: string;
     category: string | null;
     name: string | null;
+    color: number | null;
   } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -153,6 +178,11 @@ export default function ModelViewer({
   const [bgMode, setBgMode] = useState<BgMode>('theme');
   const [helpOpen, setHelpOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [autoFocus, setAutoFocus] = useState(true);
+  // Pesan sekilas di pojok kanan bawah (mis. cara mengembalikan objek yang
+  // baru disembunyikan) — supaya tidak ada objek yang "hilang" tanpa jalan pulang.
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
@@ -167,6 +197,30 @@ export default function ModelViewer({
     isolateOnRef.current = next;
     setIsolateOn(next);
     if (!next) resetIsolation();
+  }
+
+  function toggleAutoFocus() {
+    const next = !autoFocusRef.current;
+    autoFocusRef.current = next;
+    setAutoFocus(next);
+  }
+
+  function showNotice(message: string) {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setNotice(message);
+    noticeTimerRef.current = setTimeout(() => setNotice(null), NOTICE_DURATION_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  // Warna manual yang sedang dipakai objek ini (null = warna asli).
+  function paintOf(gid: string): number | null {
+    const mat = colorMatByGid.current.get(gid);
+    return mat ? mat.color.getHex() : null;
   }
 
   // Tentukan fungsi tiap tombol mouse dari kombinasi tool + Shift + mode Diam.
@@ -510,6 +564,10 @@ export default function ModelViewer({
       downX = event.clientX;
       downY = event.clientY;
       moved = false;
+      // Begitu user memegang kendali, animasi kamera berhenti — kalau tidak,
+      // tween dan gerakan tangan saling tarik-menarik. Seleksi lewat klik tetap
+      // bisa memulai animasi baru, karena `click` menyusul setelah pointerup.
+      flyRef.current = null;
       // Dua cara menoleh dengan klik kiri, keduanya sudah dilepas dari
       // OrbitControls lewat updateMouseButtons() supaya tidak bentrok:
       //   - Shift + klik kiri        -> kiri/kanan saja
@@ -537,6 +595,7 @@ export default function ModelViewer({
     // Shift + scroll = menengadah / menunduk. Zoom sudah dimatikan selama Shift
     // ditahan (lihat updateMouseButtons), jadi tidak ikut memperbesar.
     function handleWheel(event: WheelEvent) {
+      flyRef.current = null; // zoom manual membatalkan animasi auto-fokus
       if (!event.shiftKey || walkingRef.current) return;
       event.preventDefault();
       lookAround(0, -Math.sign(event.deltaY) * 0.04);
@@ -595,8 +654,10 @@ export default function ModelViewer({
           globalId: gid ?? '—',
           category: categoryOf(target),
           name: gid ? nameOf(gid) : null,
+          color: gid ? paintOf(gid) : null,
         });
         onElementSelect?.(gid);
+        if (autoFocusRef.current) focusOnMesh(target);
       } else {
         resetIsolation();
         selectedMeshRef.current = null;
@@ -670,7 +731,10 @@ export default function ModelViewer({
     function onKeyDown(e: KeyboardEvent) {
       if (isTyping()) return;
       const target = walkingRef.current ? walkKeysRef.current : orbitKeysRef.current;
-      if (setMoveKey(target, e, true)) e.preventDefault();
+      if (setMoveKey(target, e, true)) {
+        flyRef.current = null; // gerak manual membatalkan animasi auto-fokus
+        e.preventDefault();
+      }
     }
     function onKeyUp(e: KeyboardEvent) {
       // Selalu lepaskan di kedua set supaya tak ada tombol "nyangkut".
@@ -720,6 +784,19 @@ export default function ModelViewer({
             camera.position.add(move);
             controls.target.add(move);
           }
+        }
+        // Animasi auto-fokus. Posisi & target di-set langsung lalu
+        // controls.update() dipanggil seperti biasa — OrbitControls menghitung
+        // ulang offset dari keduanya, jadi tidak berebut dengan tween ini.
+        const fly = flyRef.current;
+        if (fly) {
+          fly.t = Math.min(fly.t + dt, FLY_DURATION);
+          const p = fly.t / FLY_DURATION;
+          // easeInOutCubic: berangkat & mendarat pelan, tengahnya cepat.
+          const k = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+          camera.position.lerpVectors(fly.fromPos, fly.toPos, k);
+          controls.target.lerpVectors(fly.fromTarget, fly.toTarget, k);
+          if (fly.t >= FLY_DURATION) flyRef.current = null;
         }
         controls.update();
       }
@@ -822,6 +899,7 @@ export default function ModelViewer({
       iso: [d, d * 0.8, d],
     };
     const p = table[key] ?? table.iso;
+    flyRef.current = null; // preset kamera menang atas animasi yang berjalan
     camera.position.set(p[0], p[1], p[2]);
     controls.target.set(0, 0, 0);
     controls.update();
@@ -844,6 +922,9 @@ export default function ModelViewer({
         if (modelRootRef.current) scene.remove(modelRootRef.current);
         meshesByGlobalId.current.clear();
         originalMaterials.current.clear();
+        // Model diganti -> mesh lama dibuang, warna manual ikut hangus.
+        colorMatByGid.current.forEach((mat) => mat.dispose());
+        colorMatByGid.current.clear();
         selectedMeshRef.current = null;
 
         gltf.scene.traverse((child) => {
@@ -903,6 +984,21 @@ export default function ModelViewer({
     if (modelRootRef.current) frameCameraToObject(modelRootRef.current);
   }
 
+  // Mulai animasi kamera. Dijalankan frame demi frame di animate loop, bukan
+  // dengan memindahkan kamera seketika.
+  function flyTo(toPos: THREE.Vector3, toTarget: THREE.Vector3) {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    flyRef.current = {
+      fromPos: camera.position.clone(),
+      toPos: toPos.clone(),
+      fromTarget: controls.target.clone(),
+      toTarget: toTarget.clone(),
+      t: 0,
+    };
+  }
+
   function focusOnMesh(mesh: THREE.Mesh) {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -912,11 +1008,15 @@ export default function ModelViewer({
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const dist = maxDim * 2.5;
-    const dir = new THREE.Vector3(1, 0.8, 1).normalize();
-    camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
-    controls.target.copy(center);
-    controls.update();
+    // Jangan mepet sampai menembus bidang near saat objeknya kecil sekali.
+    const dist = Math.max(maxDim * 2.5, camera.near * 20);
+    // Arah pandang DIPERTAHANKAN — kamera cuma meluncur mendekat dari sisi yang
+    // sedang dilihat. Kalau arahnya ikut dipaksa ke isometrik, tiap klik
+    // membuat pandangan berputar dan orientasi user hilang.
+    const dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-8) dir.set(1, 0.8, 1);
+    dir.normalize();
+    flyTo(center.clone().addScaledVector(dir, dist), center);
   }
 
   function applyClipping() {
@@ -965,6 +1065,7 @@ export default function ModelViewer({
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const dist = maxDim * 1.8;
+    flyRef.current = null; // "Fokus" ke seluruh model membatalkan animasi berjalan
     walkSpeedRef.current = maxDim * 0.4; // kecepatan jalan relatif ukuran model
     camera.near = Math.max(maxDim / 1000, 0.01);
     camera.far = maxDim * 100;
@@ -1021,9 +1122,64 @@ export default function ModelViewer({
     forEachMesh((mesh) => restoreMesh(mesh));
   }
 
+  // "Kembalikan seperti semula" = warna manual kalau ada, baru material asli.
+  // Urutan ini yang membuat warna bertahan setelah isolate dimatikan/direset.
   function restoreMesh(mesh: THREE.Mesh) {
+    const gid = (mesh.userData.globalId as string) || '';
+    const painted = colorMatByGid.current.get(gid);
+    if (painted) {
+      mesh.material = painted;
+      return;
+    }
     const original = originalMaterials.current.get(mesh);
     if (original) mesh.material = original;
+  }
+
+  // --- Warna objek terpilih (sementara, tidak tersimpan ke database) ---
+  function applyColor(color: number) {
+    const gid = selected?.globalId;
+    if (!gid || gid === '—') return;
+    let mat = colorMatByGid.current.get(gid);
+    if (mat) {
+      mat.color.setHex(color);
+    } else {
+      mat = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.05 });
+      colorMatByGid.current.set(gid, mat);
+    }
+    // Satu GlobalId bisa punya lebih dari satu mesh -> telusuri, jangan pakai
+    // meshesByGlobalId (map itu cuma menyimpan satu mesh per id).
+    forEachMesh((mesh) => {
+      if ((mesh.userData.globalId as string) === gid) mesh.material = mat!;
+    });
+    setSelected((cur) => (cur ? { ...cur, color } : cur));
+  }
+
+  function resetColor() {
+    const gid = selected?.globalId;
+    if (!gid) return;
+    const mat = colorMatByGid.current.get(gid);
+    if (!mat) return;
+    colorMatByGid.current.delete(gid);
+    forEachMesh((mesh) => {
+      if ((mesh.userData.globalId as string) === gid) restoreMesh(mesh);
+    });
+    mat.dispose();
+    setSelected((cur) => (cur ? { ...cur, color: null } : cur));
+  }
+
+  // Sembunyikan objek terpilih (seperti Hide di Navisworks). Isolate ikut
+  // dilepas — kalau tidak, yang tersisa di layar cuma model redup tanpa objek
+  // yang jadi pusat perhatian. Centangnya hilang di panel Struktur, jadi objek
+  // selalu punya jalan pulang: centang lagi, atau tombol "Semua".
+  function hideSelected() {
+    const gid = selected?.globalId;
+    if (!gid || gid === '—') return;
+    setElementVisible(gid, false);
+    resetIsolation();
+    selectedMeshRef.current = null;
+    setSelected(null);
+    onElementSelect?.(null);
+    showNotice(t.hideObjectNotice);
   }
 
   function dimMesh(mesh: THREE.Mesh) {
@@ -1116,9 +1272,11 @@ export default function ModelViewer({
       if (modeRef.current === 'category') isolateByCategory(mesh);
       else isolateMesh(mesh);
     }
-    setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid) });
+    setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid), color: paintOf(gid) });
     onElementSelect?.(gid);
-    focusOnMesh(mesh);
+    // Ikut aturan yang sama dengan klik di 3D: fokus hanya kalau auto-fokus
+    // menyala, dan gerakannya beranimasi.
+    if (autoFocusRef.current) focusOnMesh(mesh);
   }
 
   function selectCategory(cat: string) {
@@ -1129,7 +1287,7 @@ export default function ModelViewer({
     if (mesh) {
       selectedMeshRef.current = mesh;
       const gid = mesh.userData.globalId as string;
-      setSelected({ globalId: gid, category: cat, name: nameOf(gid) });
+      setSelected({ globalId: gid, category: cat, name: nameOf(gid), color: paintOf(gid) });
     }
   }
 
@@ -1162,6 +1320,22 @@ export default function ModelViewer({
       mesh.visible = true;
     });
     setHiddenCategories(new Set());
+    setHiddenIds(new Set());
+  }
+
+  // Kebalikan showAll: sembunyikan semuanya supaya user tinggal mencentang satu
+  // kategori yang mau dilihat — cara tercepat mengisolasi satu disiplin di
+  // antara puluhan ribu objek.
+  //
+  // Yang ditandai cukup daftar KATEGORI-nya (bukan puluhan ribu GlobalId):
+  // di panel Struktur, elemen sudah terhitung tersembunyi kalau kategorinya
+  // tersembunyi. `hiddenIds` dikosongkan supaya sekali kategori dicentang,
+  // semua isinya langsung ikut tampil.
+  function hideAll() {
+    forEachMesh((mesh) => {
+      mesh.visible = false;
+    });
+    setHiddenCategories(new Set(treeData.map((c) => c.category)));
     setHiddenIds(new Set());
   }
 
@@ -1217,6 +1391,7 @@ export default function ModelViewer({
               onToggleCategory={setCategoryVisible}
               onToggleElement={setElementVisible}
               onShowAll={showAll}
+              onHideAll={hideAll}
             />
           </div>
         )}
@@ -1244,6 +1419,13 @@ export default function ModelViewer({
           🚶
         </button>
         <div className="my-0.5 h-px w-9 bg-white/10" />
+        <button
+          onClick={toggleAutoFocus}
+          className={dockBtn(autoFocus)}
+          title={autoFocus ? t.autoFocusOn : t.autoFocusOff}
+        >
+          🎯
+        </button>
         <button
           onClick={() => setSpeedOpen((v) => !v)}
           className={dockBtn(speedOpen)}
@@ -1498,21 +1680,67 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Info elemen terpilih. */}
+      {/* Info + aksi elemen terpilih. Ikut bergeser saat panel Struktur dibuka
+          — keduanya di sisi kiri, kalau tidak digeser kotaknya tertutup panel. */}
       {selected && (
-        <div className="absolute bottom-3 left-3 z-30 max-w-[18rem] rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur">
+        <div
+          className="absolute bottom-3 z-30 w-60 rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur transition-all duration-300"
+          style={{ left: treeOpen ? '17rem' : '0.75rem' }}
+        >
           <div className="opacity-60">{t.selected}</div>
           <div className="font-medium">{selected.category ?? t.noCategory}</div>
           {selected.name && <div className="break-words opacity-80">{selected.name}</div>}
           <div className="truncate opacity-40" title={selected.globalId}>
             {selected.globalId}
           </div>
+
+          {/* Warna & sembunyi: sementara, hanya di layar ini. */}
+          <div className="mt-2 flex items-center gap-1 border-t border-white/10 pt-2">
+            <span className="mr-0.5 shrink-0 opacity-60">{t.color}</span>
+            {PAINT_COLORS.map((c) => (
+              <button
+                key={c}
+                onClick={() => applyColor(c)}
+                title={t.color}
+                className={`h-4 w-4 shrink-0 rounded-full border transition-transform hover:scale-110 ${
+                  selected.color === c ? 'border-white ring-1 ring-white' : 'border-white/30'
+                }`}
+                style={{ backgroundColor: `#${c.toString(16).padStart(6, '0')}` }}
+              />
+            ))}
+            <button
+              onClick={resetColor}
+              disabled={selected.color == null}
+              title={t.colorReset}
+              className="ml-0.5 shrink-0 text-sm opacity-70 hover:opacity-100 disabled:opacity-25"
+            >
+              ↺
+            </button>
+          </div>
+          <button
+            onClick={hideSelected}
+            className="mt-2 w-full rounded border border-white/20 bg-white/10 px-2 py-1 text-[11px] transition-colors hover:bg-white/20"
+            title={t.hideObjectNotice}
+          >
+            {t.hideObject}
+          </button>
         </div>
       )}
 
       {liveUpdateMessage && (
         <div className="absolute bottom-3 right-3 z-30 rounded bg-black/70 px-3 py-1 text-xs text-white">
           {liveUpdateMessage}
+        </div>
+      )}
+
+      {/* Pesan sekilas (mis. cara mengembalikan objek yang disembunyikan). */}
+      {notice && (
+        <div
+          className={`absolute right-3 z-30 max-w-[16rem] rounded border border-white/20 bg-black/75 px-3 py-1.5 text-[11px] leading-snug text-white backdrop-blur ${
+            liveUpdateMessage ? 'bottom-12' : 'bottom-3'
+          }`}
+        >
+          {notice}
         </div>
       )}
 

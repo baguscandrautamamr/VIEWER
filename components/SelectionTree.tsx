@@ -16,6 +16,9 @@ export interface TreeStrings {
   search: string;
   empty: string;
   showAll: string;
+  hideAll: string;
+  checkAll: string;
+  uncheckAll: string;
   isolate: string;
   count: string;
 }
@@ -35,6 +38,7 @@ export default function SelectionTree({
   onToggleCategory,
   onToggleElement,
   onShowAll,
+  onHideAll,
 }: {
   categories: TreeCategory[];
   strings: TreeStrings;
@@ -46,6 +50,7 @@ export default function SelectionTree({
   onToggleCategory: (category: string, visible: boolean) => void;
   onToggleElement: (globalId: string, visible: boolean) => void;
   onShowAll: () => void;
+  onHideAll: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -77,15 +82,29 @@ export default function SelectionTree({
 
   return (
     <div className="flex h-full flex-col text-white">
-      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-        <span className="text-sm font-medium">{strings.title}</span>
-        <button
-          onClick={onShowAll}
-          className="text-[11px] opacity-70 hover:opacity-100"
-          title={strings.showAll}
-        >
-          {strings.showAll}
-        </button>
+      {/* Kepala panel. Dua tombol berpasangan: centang semua & kosongkan.
+          "Kosongkan" dipakai untuk mengisolasi satu disiplin — sembunyikan
+          semuanya dulu, lalu centang kategori yang ingin dilihat saja. */}
+      <div className="border-b border-white/10 px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-sm font-medium">{strings.title}</span>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={onShowAll}
+              className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] transition-colors hover:bg-white/20"
+              title={strings.showAll}
+            >
+              ☑ {strings.checkAll}
+            </button>
+            <button
+              onClick={onHideAll}
+              className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] transition-colors hover:bg-white/20"
+              title={strings.hideAll}
+            >
+              ☐ {strings.uncheckAll}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="p-2">

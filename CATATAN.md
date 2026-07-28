@@ -73,8 +73,8 @@ Website presentasi model Revit ke client:
 - **Kecepatan (⚡)** — slider 0.1×–3× untuk gerak keyboard & walkthrough
 - **Tampilan (💡)** — kecerahan 0.4×–2.5× + warna latar (tema/terang/putih/gelap)
 - **Pintasan (?)** — daftar pintasan keyboard & mouse
+- **Layar penuh (⛶)** — viewer + semua overlay jadi layar penuh
 - **Isolate** (Objek / Kategori), **Fokus**, **Diam**, **Section**, **Coret**, **Reset**
-- **Ganti warna** elemen terpilih — di kotak info kiri bawah
 - **Section box** — 6 slider (X+/X−, Y+/Y−, Z+/Z−) + Reset
 - **Markup** — pena, panah, teks (diketik langsung di kanvas), undo, hapus, simpan PNG
 
@@ -85,6 +85,7 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- Tombol **layar penuh (⛶)** di dock; **fitur ganti warna elemen dihapus**
 - Panel **Tampilan (💡)**: slider kecerahan + pilihan warna latar, tersimpan di
   `localStorage`. Pencahayaan default dinaikkan (ambient + hemisphere + key +
   fill) supaya tidak terlalu gelap dibanding tampilan Shaded di Revit
@@ -136,6 +137,7 @@ Jangan diulang tanpa alasan baru — ini sudah pernah dicoba:
 |---|---|---|
 | **Komentar/anotasi tersimpan** (pin 3D + tabel `comments` + API) | Dihapus | Diminta dihapus. Tabel `comments` juga sudah dibuang dari `schema.sql` |
 | **Section box interaktif** (gizmo 6 handle bisa ditarik) | Di-revert | Dipakai terasa tidak enak; kembali ke 6 slider |
+| **Ganti warna elemen** (palet di kotak info) | Dihapus | Diminta dihapus. `colorMatByGid` & override material ikut dibuang, `restoreMesh()` kembali sederhana |
 | **Markup teks pakai `window.prompt`** | Diganti | Pop-up mengganggu; sekarang input inline di kanvas |
 | **Roda tengah untuk lihat sekeliling** | Diganti | Direbut autoscroll browser; pindah ke klik kiri |
 

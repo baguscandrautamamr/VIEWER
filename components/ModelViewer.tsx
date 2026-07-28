@@ -28,8 +28,6 @@ type Tool = 'orbit' | 'pan' | 'measure' | 'walk';
 const DIMMED_OPACITY = 0.12;
 const HIGHLIGHT_DURATION_MS = 3000;
 const DEFAULT_CATEGORY = 'Default';
-// Palet warna untuk fitur "Ganti Warna" elemen terpilih.
-const PAINT_COLORS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ffffff'];
 // Sensitivitas menoleh (radian per piksel geseran mouse).
 const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
 const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
@@ -53,6 +51,9 @@ export default function ModelViewer({
   cameraPreset = null,
   onElementSelect,
 }: ModelViewerProps) {
+  // Pembungkus terluar viewer — yang dijadikan layar penuh (ikut membawa
+  // semua overlay: dock, panel, hint).
+  const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -76,10 +77,8 @@ export default function ModelViewer({
   const modeRef = useRef<IsolateMode>('object');
   const isolateOnRef = useRef(true);
   const dimMaterialRef = useRef<THREE.Material | null>(null);
-  // Mesh yang terakhir diklik (dipakai fitur ganti warna).
+  // Mesh yang terakhir diklik.
   const selectedMeshRef = useRef<THREE.Mesh | null>(null);
-  // Override warna per globalId (fitur "Ganti Warna"). Bertahan lewat isolate.
-  const colorMatByGid = useRef<Map<string, THREE.Material>>(new Map());
 
   // --- Tool aktif ---
   const toolRef = useRef<Tool>('orbit');
@@ -147,6 +146,7 @@ export default function ModelViewer({
   const [brightness, setBrightness] = useState(1);
   const [bgMode, setBgMode] = useState<BgMode>('theme');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const t = locales[locale].viewer;
   const tt = locales[locale].tree;
@@ -246,6 +246,25 @@ export default function ModelViewer({
       /* preferensi rusak / tidak bisa dibaca — pakai default */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Layar penuh pada pembungkus viewer, bukan seluruh halaman — supaya dock,
+  // panel, dan hint tetap ikut tampil. Canvas menyesuaikan sendiri lewat
+  // ResizeObserver yang sudah ada.
+  function toggleFullscreen() {
+    const el = rootRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else el.requestFullscreen().catch(() => {});
+  }
+
+  // Ikuti perubahan dari mana pun (tombol, tombol Esc, atau F11 browser).
+  useEffect(() => {
+    function onChange() {
+      setFullscreen(document.fullscreenElement === rootRef.current);
+    }
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
 
   function toggleLock() {
@@ -777,7 +796,6 @@ export default function ModelViewer({
         if (modelRootRef.current) scene.remove(modelRootRef.current);
         meshesByGlobalId.current.clear();
         originalMaterials.current.clear();
-        colorMatByGid.current.clear();
         selectedMeshRef.current = null;
 
         gltf.scene.traverse((child) => {
@@ -947,14 +965,9 @@ export default function ModelViewer({
     forEachMesh((mesh) => restoreMesh(mesh));
   }
 
-  // Kembalikan material mesh: override warna (kalau ada) diprioritaskan,
-  // baru material asli.
   function restoreMesh(mesh: THREE.Mesh) {
-    const gid = (mesh.userData.globalId as string) || '';
-    const override = colorMatByGid.current.get(gid);
     const original = originalMaterials.current.get(mesh);
-    if (override) mesh.material = override;
-    else if (original) mesh.material = original;
+    if (original) mesh.material = original;
   }
 
   function dimMesh(mesh: THREE.Mesh) {
@@ -980,29 +993,6 @@ export default function ModelViewer({
     setTimeout(() => {
       mesh.material = original;
     }, HIGHLIGHT_DURATION_MS);
-  }
-
-  // --- Ganti warna elemen terpilih ---
-  function applyColor(hex: string) {
-    const mesh = selectedMeshRef.current;
-    if (!mesh) return;
-    const gid = (mesh.userData.globalId as string) || '';
-    if (!gid) return;
-    const orig = originalMaterials.current.get(mesh);
-    const base = (Array.isArray(orig) ? orig[0] : orig) as THREE.Material | undefined;
-    const clone = base ? (base.clone() as THREE.Material) : new THREE.MeshStandardMaterial();
-    // @ts-expect-error material standar punya .color
-    clone.color = new THREE.Color(hex);
-    colorMatByGid.current.set(gid, clone);
-    restoreMesh(mesh);
-  }
-
-  function resetColor() {
-    const mesh = selectedMeshRef.current;
-    if (!mesh) return;
-    const gid = (mesh.userData.globalId as string) || '';
-    colorMatByGid.current.delete(gid);
-    restoreMesh(mesh);
   }
 
   // --- Measure (ukur jarak) ---
@@ -1141,7 +1131,7 @@ export default function ModelViewer({
   const showHint = !markupOn && !walking && measureDist == null;
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
+    <div ref={rootRef} className="relative h-full w-full overflow-hidden bg-background">
       <div ref={containerRef} className="h-full w-full" />
 
       {/* Panel Selection Tree (kiri, collapsible). */}
@@ -1272,6 +1262,14 @@ export default function ModelViewer({
             </div>
           </div>
         )}
+
+        <button
+          onClick={toggleFullscreen}
+          className={dockBtn(fullscreen)}
+          title={fullscreen ? t.fullscreenExit : t.fullscreen}
+        >
+          {fullscreen ? '⤡' : '⛶'}
+        </button>
 
         {/* Daftar pintasan — disembunyikan supaya tidak memenuhi layar. */}
         <button onClick={() => setHelpOpen((v) => !v)} className={dockBtn(helpOpen)} title={t.shortcuts}>
@@ -1443,33 +1441,12 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Info elemen terpilih + ganti warna. */}
+      {/* Info elemen terpilih. */}
       {selected && (
         <div className="absolute bottom-3 left-3 z-30 rounded bg-black/70 px-3 py-2 text-xs text-white backdrop-blur">
           <div className="opacity-60">{t.selected}</div>
           <div className="font-medium">{selected.category ?? t.noCategory}</div>
-          <div className="mb-2 opacity-50">{selected.globalId}</div>
-          {selected.globalId !== '—' && (
-            <div className="flex items-center gap-1.5">
-              <span className="mr-1 opacity-60">{t.color}:</span>
-              {PAINT_COLORS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => applyColor(c)}
-                  aria-label={c}
-                  style={{ background: c }}
-                  className="h-4 w-4 rounded-full border border-white/40 hover:scale-110"
-                />
-              ))}
-              <button
-                onClick={resetColor}
-                className="ml-1 text-[10px] opacity-70 underline hover:opacity-100"
-                title={t.colorReset}
-              >
-                ↺
-              </button>
-            </div>
-          )}
+          <div className="opacity-50">{selected.globalId}</div>
         </div>
       )}
 

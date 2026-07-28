@@ -30,6 +30,9 @@ const HIGHLIGHT_DURATION_MS = 3000;
 const DEFAULT_CATEGORY = 'Default';
 // Palet warna untuk fitur "Ganti Warna" elemen terpilih.
 const PAINT_COLORS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ffffff'];
+// Sensitivitas menoleh (radian per piksel geseran mouse).
+const LOOK_SENSITIVITY = 0.005; // Shift + klik kiri
+const LOOK_SENSITIVITY_SLOW = 0.002; // roda tengah di mode Diam — sengaja pelan
 
 export default function ModelViewer({
   projectId,
@@ -95,8 +98,9 @@ export default function ModelViewer({
   // OrbitControls memasang handler pointerdown-nya lebih dulu, jadi pemetaan
   // tombol mouse harus sudah benar sebelum tombol ditekan.
   const shiftDownRef = useRef(false);
-  // Drag "menoleh" kiri/kanan (Shift + klik kiri).
-  const lookDragRef = useRef<{ x: number } | null>(null);
+  // Drag "menoleh". freeLook = roda tengah di mode Diam (kiri/kanan + atas/
+  // bawah, pelan); selain itu Shift + klik kiri (kiri/kanan saja).
+  const lookDragRef = useRef<{ x: number; y: number; freeLook: boolean } | null>(null);
 
   const [mode, setMode] = useState<IsolateMode>('object');
   const [isolateOn, setIsolateOn] = useState(true);
@@ -148,8 +152,14 @@ export default function ModelViewer({
           ? null // mode Diam: klik kiri tidak memutar model
           : THREE.MOUSE.ROTATE;
 
-    // Shift + roda tengah = orbit; tanpa Shift roda tengah tetap zoom.
-    controls.mouseButtons.MIDDLE = shift ? THREE.MOUSE.ROTATE : THREE.MOUSE.DOLLY;
+    // Shift + roda tengah = orbit. Tanpa Shift: di mode Diam roda tengah
+    // dipakai untuk menoleh bebas (ditangani manual, jadi dilepas dari
+    // OrbitControls); di luar mode Diam tetap zoom seperti biasa.
+    controls.mouseButtons.MIDDLE = shift
+      ? THREE.MOUSE.ROTATE
+      : lockOnRef.current
+        ? null
+        : THREE.MOUSE.DOLLY;
     // Saat Shift ditahan, scroll dipakai untuk menengadah/menunduk, bukan zoom.
     controls.enableZoom = !shift;
     controls.enableDamping = !lockOnRef.current;
@@ -305,10 +315,16 @@ export default function ModelViewer({
       downX = event.clientX;
       downY = event.clientY;
       moved = false;
-      // Shift + klik kiri = menoleh kiri/kanan. OrbitControls sudah dilepas
-      // dari tombol kiri (LEFT = null saat Shift), jadi tidak bentrok.
-      if (event.shiftKey && event.button === 0 && !walkingRef.current) {
-        lookDragRef.current = { x: event.clientX };
+      // Dua cara menoleh, keduanya sudah dilepas dari OrbitControls lewat
+      // updateMouseButtons() supaya tidak bentrok:
+      //   - Shift + klik kiri  -> kiri/kanan saja
+      //   - roda tengah (mode Diam) -> bebas kiri/kanan + atas/bawah, pelan
+      const shiftLook = event.shiftKey && event.button === 0;
+      const wheelLook = lockOnRef.current && !event.shiftKey && event.button === 1;
+      if ((shiftLook || wheelLook) && !walkingRef.current) {
+        // Cegah ikon autoscroll Windows saat tombol tengah ditekan.
+        if (event.button === 1) event.preventDefault();
+        lookDragRef.current = { x: event.clientX, y: event.clientY, freeLook: wheelLook };
         renderer.domElement.setPointerCapture(event.pointerId);
       }
     }
@@ -319,10 +335,14 @@ export default function ModelViewer({
       const look = lookDragRef.current;
       if (look) {
         const dx = event.clientX - look.x;
+        const dy = event.clientY - look.y;
         look.x = event.clientX;
-        // Geser ke kanan -> pandangan menoleh ke kanan (putar searah jarum jam
-        // dilihat dari atas, jadi sudutnya negatif terhadap sumbu Y).
-        lookAround(-dx * 0.005, 0);
+        look.y = event.clientY;
+        // Geser kanan -> menoleh kanan (putar searah jarum jam dilihat dari
+        // atas, jadi negatif terhadap sumbu Y). Geser atas (dy negatif) ->
+        // menengadah. Sumbu vertikal hanya untuk free look roda tengah.
+        const sens = look.freeLook ? LOOK_SENSITIVITY_SLOW : LOOK_SENSITIVITY;
+        lookAround(-dx * sens, look.freeLook ? -dy * sens : 0);
       }
     }
     function handlePointerUp() {

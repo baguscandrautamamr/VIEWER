@@ -344,31 +344,55 @@ export default function ModelViewer({
   // Objek di GLB dinamai GlobalId (IfcConvert dijalankan dengan
   // --use-element-guids), jadi nama yang bisa dibaca manusia HANYA ada di
   // tabel ini. Kalau tabel kosong, viewer terpaksa menampilkan GlobalId dan
-  // semua elemen jatuh ke kategori "Default" — isi tabelnya dengan
-  // `node scripts/ifc-to-web.mjs <file.ifc> <project_id>`.
+  // semua elemen jatuh ke kategori "Default" — isi lewat tombol impor di
+  // halaman Kelola.
+  //
+  // WAJIB paginasi: Supabase membatasi jumlah baris per permintaan (bawaannya
+  // 1000). Model besar gampang punya puluhan ribu elemen, dan tanpa paginasi
+  // sisanya hilang DIAM-DIAM — tabel terisi penuh, tapi elemen yang barisnya
+  // ada di belakang tetap tampil sebagai GlobalId di kategori "Default".
   useEffect(() => {
     let active = true;
-    getSupabase()
-      .from('elements')
-      .select('global_id, category, name')
-      .eq('project_id', projectId)
-      .then(({ data }) => {
-        if (!active || !data) return;
-        const cats = new Map<string, string>();
-        const names = new Map<string, string>();
+
+    (async () => {
+      const PAGE = 1000;
+      const MAX_PAGES = 500; // pengaman: berhenti di 500rb baris
+      const cats = new Map<string, string>();
+      const names = new Map<string, string>();
+      let from = 0;
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { data, error } = await getSupabase()
+          .from('elements')
+          .select('global_id, category, name')
+          .eq('project_id', projectId)
+          .range(from, from + PAGE - 1);
+
+        if (!active) return;
+        if (error) {
+          console.error('Gagal memuat nama elemen:', error.message);
+          break;
+        }
+        if (!data || data.length === 0) break; // halaman kosong = sudah habis
+
         data.forEach((row) => {
           const gid = row.global_id as string;
           if (row.category) cats.set(gid, row.category as string);
           if (row.name) names.set(gid, row.name as string);
         });
-        categoryByGlobalId.current = cats;
-        nameByGlobalId.current = names;
-        buildTree(); // data dari DB baru datang -> susun ulang tree
-        // Info elemen yang sedang terpilih ikut diperbarui supaya namanya muncul.
-        setSelected((cur) =>
-          cur ? { ...cur, name: names.get(cur.globalId) ?? cur.name } : cur
-        );
-      });
+        // Maju sebanyak baris yang BENAR-BENAR diterima — batas server bisa
+        // lebih kecil dari PAGE, dan kalau maju sebesar PAGE barisnya terlewat.
+        from += data.length;
+      }
+
+      if (!active) return;
+      categoryByGlobalId.current = cats;
+      nameByGlobalId.current = names;
+      buildTree(); // data dari DB baru datang -> susun ulang tree
+      // Info elemen yang sedang terpilih ikut diperbarui supaya namanya muncul.
+      setSelected((cur) => (cur ? { ...cur, name: names.get(cur.globalId) ?? cur.name } : cur));
+    })();
+
     return () => {
       active = false;
     };

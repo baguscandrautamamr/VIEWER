@@ -68,8 +68,11 @@ Website presentasi model Revit ke client:
 ### Tool & tombol
 
 - **Struktur (☰)** — pohon Kategori → Elemen, checkbox show/hide, kolom cari,
-  klik nama = isolate + fokus
+  klik nama = isolate + fokus, tombol **☑ Semua** & **☐ Kosongkan** di kepala panel
 - **Putar / Geser / Ukur / Walkthrough** — dock kiri
+- **Auto-fokus (🎯)** — klik objek = kamera beranimasi mendekat; bisa dimatikan
+- **Kotak objek terpilih** — kategori/nama/GlobalId + palet warna (↺ reset) +
+  Sembunyikan objek. Sementara, tidak masuk database
 - **Kecepatan (⚡)** — slider 0.1×–3× untuk gerak keyboard & walkthrough
 - **Tampilan (💡)** — kecerahan 0.4×–2.5× + warna latar (tema/terang/putih/gelap)
 - **Pintasan (?)** — daftar pintasan keyboard & mouse
@@ -85,6 +88,15 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Aksi ke objek terpilih, auto-fokus, & Kosongkan.** Tiga permintaan sekaligus:
+  (1) kotak "Selected" dapat palet warna + tombol Sembunyikan objek, dan ikut
+  bergeser saat panel Struktur dibuka (sebelumnya tertutup panel);
+  (2) klik objek di 3D memicu kamera mendekat **beranimasi** lewat tween di
+  animate loop, dengan tombol 🎯 untuk mematikannya; (3) tombol **☐ Kosongkan**
+  sebagai pasangan **☑ Semua** di kepala panel Struktur.
+  **Fitur ganti warna dihidupkan lagi** setelah sempat dihapus — kali ini
+  warnanya bertahan saat isolate karena `restoreMesh` mengembalikan material
+  warna lebih dulu, baru material asli
 - **Fix: nama elemen hilang pada model besar.** Query `elements` di viewer
   belum dipaginasi, jadi dari 22.317 baris hanya ~1000 pertama yang terbaca —
   elemen di bagian belakang file IFC (mis. elektrikal) tetap tampil sebagai
@@ -150,7 +162,7 @@ Jangan diulang tanpa alasan baru — ini sudah pernah dicoba:
 |---|---|---|
 | **Komentar/anotasi tersimpan** (pin 3D + tabel `comments` + API) | Dihapus | Diminta dihapus. Tabel `comments` juga sudah dibuang dari `schema.sql` |
 | **Section box interaktif** (gizmo 6 handle bisa ditarik) | Di-revert | Dipakai terasa tidak enak; kembali ke 6 slider |
-| **Ganti warna elemen** (palet di kotak info) | Dihapus | Diminta dihapus. `colorMatByGid` & override material ikut dibuang, `restoreMesh()` kembali sederhana |
+| **Ganti warna elemen** (palet di kotak info) | Dihapus lalu **dihidupkan lagi** (28 Juli 2026) | Sempat diminta dihapus, lalu diminta kembali bersama tombol Sembunyikan objek. Sekarang `colorMatByGid` dipakai di dalam `restoreMesh()` supaya warna bertahan saat isolate |
 | **Markup teks pakai `window.prompt`** | Diganti | Pop-up mengganggu; sekarang input inline di kanvas |
 | **Roda tengah untuk lihat sekeliling** | Diganti | Direbut autoscroll browser; pindah ke klik kiri |
 
@@ -252,7 +264,48 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     pendek dari yang diminta — batas server bisa lebih kecil dari yang kita
     minta. Lihat pemuatan `elements` di `ModelViewer.tsx`.
 
-17. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+17. **Animasi kamera harus jalan di animate loop, dan mengalah pada user.**
+    Tween disimpan di `flyRef` lalu di-lerp tiap frame **sebelum**
+    `controls.update()` — OrbitControls menghitung ulang offset dari
+    posisi+target, jadi keduanya tidak berebut. Tween dibatalkan
+    (`flyRef.current = null`) di `pointerdown`, `wheel`, tombol gerak,
+    `frameCameraToObject`, dan preset kamera. Tanpa itu, kamera terasa "melawan"
+    saat user menggerakkan mouse di tengah animasi. Urutan event menyelamatkan
+    seleksi: `pointerdown` (batal) → `pointerup` → `click` (mulai tween baru).
+
+18. **Auto-fokus jangan mengubah ARAH pandang.** Versi pertama `focusOnMesh`
+    memaksa arah isometrik `(1, 0.8, 1)`; hasilnya tiap klik pandangan ikut
+    berputar dan user kehilangan orientasi. Sekarang arah pandang sekarang
+    dipertahankan — kamera cuma meluncur mendekat dari sisi yang sedang dilihat.
+    Jaraknya juga dibatasi `camera.near * 20` supaya objek kecil tidak tembus
+    bidang near.
+
+19. **Warna manual hidup di `restoreMesh()`, bukan di pemanggilnya.** Kalau
+    warna dipasang langsung ke mesh, isolate akan menghapusnya (isolate memanggil
+    `restoreMesh` yang mengembalikan material asli). Karena itu `colorMatByGid`
+    dibaca **di dalam** `restoreMesh`: material warna dulu, material asli kalau
+    tidak ada. Materialnya juga di-dispose saat model diganti di `loadModel`.
+
+20. **"Kosongkan" cukup menandai KATEGORI, bukan puluhan ribu GlobalId.** Di
+    panel Struktur elemen sudah terhitung tersembunyi kalau kategorinya
+    tersembunyi (`hiddenIds.has(...) || catHidden`), jadi `hideAll()` mengisi
+    `hiddenCategories` saja dan mengosongkan `hiddenIds` — sekali kategori
+    dicentang, seluruh isinya langsung ikut tampil. Mengisi `hiddenIds` dengan
+    22 ribu id tidak salah, tapi mubazir dan bikin sekali centang kategori tidak
+    memunculkan apa-apa.
+
+21. **Objek yang disembunyikan wajib punya jalan pulang.** Tombol "Sembunyikan
+    objek" memakai `setElementVisible()` yang sama dengan checkbox, jadi
+    centangnya ikut lepas di panel Struktur dan bisa dikembalikan dari sana atau
+    lewat "☑ Semua". Isolate ikut dilepas — kalau tidak, yang tersisa di layar
+    cuma model redup tanpa objek yang jadi pusat perhatian. Pesan singkat di
+    kanan bawah memberitahu cara mengembalikannya.
+
+22. **Kotak "Selected" dan panel Struktur sama-sama di kiri.** Kotak info harus
+    ikut bergeser (`left: treeOpen ? '17rem' : '0.75rem'`, sama seperti dock),
+    kalau tidak dia tertutup panel saat panel dibuka.
+
+23. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

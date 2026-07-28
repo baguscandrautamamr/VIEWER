@@ -70,9 +70,9 @@ Website presentasi model Revit ke client:
 - **Struktur (☰)** — pohon Kategori → Elemen, checkbox show/hide, kolom cari,
   klik nama = isolate + fokus, tombol **☑ Semua** & **☐ Kosongkan** di kepala panel
 - **Putar / Geser / Ukur / Walkthrough** — dock kiri
-- **Auto-fokus (🎯)** — klik objek = kamera beranimasi mendekat; bisa dimatikan
+- **Auto-fokus** — klik objek = kamera beranimasi mendekat (selalu aktif, tanpa tombol)
 - **Kotak objek terpilih** — kategori/nama/GlobalId + palet warna (↺ reset) +
-  Sembunyikan objek. Sementara, tidak masuk database
+  Sembunyikan. Ringkas satu baris. Sementara, tidak masuk database
 - **Kecepatan (⚡)** — slider 0.1×–3× untuk gerak keyboard & walkthrough
 - **Tampilan (💡)** — kecerahan 0.4×–2.5× + warna latar (tema/terang/putih/gelap)
 - **Pintasan (?)** — daftar pintasan keyboard & mouse
@@ -88,6 +88,14 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Fix: fitting cable tray (tee/bend) tampil "Tanpa kategori".** Objeknya di
+  GLB dinamai ANGKA — itu ElementId Revit, bukan GlobalId — jadi pencarian ke
+  tabel `elements` meleset. Dijodohkan lewat ekor Name IFC
+  (`Family:Type:1073322`), indeks cadangan dibangun di viewer. Tidak perlu
+  impor ulang, data yang sudah ada langsung terpakai
+- **Tombol auto-fokus (🎯) dihapus** — perilakunya tetap, selalu aktif
+- Kotak objek terpilih **diperkecil**: warna, ↺, dan tombol Sembunyikan jadi
+  satu baris; label "Terpilih"/"Warna" dibuang, GlobalId pindah ke ujung kanan
 - **Ukur menampilkan selisih X / Y / Z** setelah titik kedua diklik, di bawah
   angka jarak. Dipetakan ke konvensi Revit (Z = tinggi), bukan sumbu mentah
   Three.js — GLB hasil IfcConvert itu Y-up sedangkan IFC/Revit Z-up
@@ -316,7 +324,21 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     membingungkan orang yang terbiasa Revit. Tandanya dibuang (nilai mutlak),
     jadi arah putaran Y vs −Y tidak perlu dipusingkan.
 
-24. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+24. **Tidak semua objek GLB dinamai GlobalId — sebagian bernama ANGKA.** Itu
+    ElementId Revit. Gejalanya: sebagian besar model bernama benar, tapi
+    segelintir elemen (sering fitting seperti tee/bend cable tray) tetap
+    "Tanpa kategori" walaupun tabel `elements` sudah penuh dan parser IFC-nya
+    terbukti menangkap elemen itu. Jangan buru-buru menyalahkan parser: cek
+    dulu GlobalId yang tampil di kotak objek terpilih — kalau isinya angka
+    (bukan 22 karakter), penyebabnya penamaan GLB, bukan parsing.
+
+    Penyelamatnya: ElementId itu ikut tertulis di ekor Name IFC
+    (`Family:Type:1073322`), jadi viewer membangun indeks cadangan
+    `elementByElementId` dan `nameOf`/`categoryOf` jatuh ke sana kalau
+    pencarian GlobalId meleset. Kunci sepanjang 22 karakter dikecualikan
+    (`altKeyOf`) supaya GUID yang kebetulan diawali angka tidak salah jodoh.
+
+25. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

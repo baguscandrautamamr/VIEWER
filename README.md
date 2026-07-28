@@ -83,16 +83,16 @@ Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
   kolom cari. Di kepala panel ada **☑ Semua** dan **☐ Kosongkan** —
   "Kosongkan" menyembunyikan semuanya supaya tinggal mencentang satu kategori
   yang mau dilihat (cara tercepat mengisolasi satu disiplin).
-- **Auto-fokus (🎯)** — klik objek di 3D, kamera meluncur halus mendekat
-  (beranimasi, bukan melompat). Bisa dimatikan lewat tombol ini kalau sedang
-  menjelaskan ke client dan kamera tidak boleh bergerak. Aktif secara bawaan.
-  Animasi berhenti begitu mouse/keyboard disentuh.
-- **Objek terpilih** — kotak kiri bawah menampilkan kategori, nama, dan
-  GlobalId, plus **palet warna** (tandai objek; ↺ mengembalikan warna asli) dan
-  **Sembunyikan objek**. Warna bertahan walaupun isolate dipakai. Keduanya
-  **sementara** — hanya di layar kamu, tidak tersimpan ke database, hilang saat
-  halaman di-refresh. Objek yang disembunyikan centangnya ikut lepas di panel
-  Struktur, jadi selalu bisa dikembalikan dari sana atau lewat **☑ Semua**.
+- **Auto-fokus** — klik objek di 3D (atau nama di panel Struktur), kamera
+  meluncur halus mendekat: beranimasi, bukan melompat, dan arah pandang
+  dipertahankan. Animasi berhenti begitu mouse/keyboard disentuh. Selalu aktif,
+  tidak ada tombolnya.
+- **Objek terpilih** — kotak ringkas di kiri bawah: kategori, nama, GlobalId,
+  **palet warna** (↺ mengembalikan warna asli) dan tombol **Sembunyikan**.
+  Warna bertahan walaupun isolate dipakai. Keduanya **sementara** — hanya di
+  layar kamu, tidak tersimpan ke database, hilang saat halaman di-refresh.
+  Objek yang disembunyikan centangnya ikut lepas di panel Struktur, jadi selalu
+  bisa dikembalikan dari sana atau lewat **☑ Semua**.
 - **Putar / Geser (Pan) / Walkthrough** — tool navigasi. Pan = seret untuk
   menggeser; Walkthrough = jalan first-person: **W/S** maju-mundur, **A/D**
   geser, **Q** naik, **E** turun, mouse lihat, **Esc** keluar.
@@ -168,6 +168,11 @@ Butuh `IFCCONVERT_PATH` di `.env.local` (atau `IfcConvert` ada di PATH).
 > **"Impor nama elemen dari IFC"** — pilih file `.ifc`, selesai. File-nya tidak
 > di-upload (dibaca langsung di browser, yang dikirim cuma daftar nama &
 > kategori), dan model GLB tidak perlu diganti.
+
+> **Sebagian objek GLB dinamai angka, bukan GlobalId** — biasanya fitting
+> seperti tee/bend cable tray. Angka itu ElementId Revit. Viewer sudah
+> menjodohkannya lewat ekor nama IFC (`Family:Type:1073322`), jadi elemen
+> semacam ini tetap dapat nama & kategori tanpa impor ulang.
 
 > **`project_id` penting.** IfcConvert dijalankan dengan `--use-element-guids`,
 > jadi objek di GLB dinamai GlobalId (kode 22 karakter) — nama & kategori yang

@@ -85,6 +85,9 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 28 Juli 2026
+- **Tombol "Impor nama elemen dari IFC"** di halaman Kelola — alternatif tanpa
+  Command Prompt. File IFC dibaca bertahap di browser (tidak di-upload), yang
+  dikirim ke `/api/elements` cuma daftar `{guid, category, name}` per batch
 - **Nama elemen muncul di viewer.** `ifc-to-web.mjs` sekarang menerima
   `project_id` opsional dan langsung mengisi tabel `elements` (tidak perlu
   paste SQL manual lagi); viewer mengambil kolom `name` dan memakainya sebagai
@@ -222,7 +225,15 @@ Baca ini sebelum mengubah `ModelViewer.tsx` — semuanya hasil bug nyata.
     identitas yang stabil antar versi, dipakai untuk highlight perubahan dan
     penyimpanan data per-elemen.
 
-15. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
+15. **Baca file besar bertahap: teks yang belum utuh harus DIBAWA, bukan
+    diproses lalu dibuang.** Di `ImportElements.tsx`, kalau satu potongan belum
+    memuat baris baru, seluruh isinya disimpan untuk disambung ke potongan
+    berikutnya. Versi pertama memprosesnya lalu mengosongkan penyangga —
+    akibatnya entity yang terbelah di batas potongan hilang diam-diam (tidak
+    error, cuma jumlahnya kurang). Pembatasnya **baris baru**, bukan `;`,
+    karena `;` bisa muncul di dalam nama seperti `"Ruang; Kantor"`.
+
+16. **Model terlihat gelap karena pencahayaan default Three.js terlalu minim.**
     Tampilan Shaded Revit itu rata & terang, jadi porsi cahaya menyebar
     (ambient + hemisphere) harus besar, dan perlu lampu isi dari sisi
     berlawanan supaya sisi yang membelakangi cahaya tidak hitam pekat. Nilai

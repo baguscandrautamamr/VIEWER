@@ -150,6 +150,11 @@ kategori tiap elemen ke tabel `elements`**. Hasilnya `<nama-ifc>-web.glb` —
 tinggal upload di halaman Kelola (Upload model GLB).
 Butuh `IFCCONVERT_PATH` di `.env.local` (atau `IfcConvert` ada di PATH).
 
+> **Tidak mau pakai Command Prompt?** Di halaman Kelola ada tombol
+> **"Impor nama elemen dari IFC"** — pilih file `.ifc`, selesai. File-nya tidak
+> di-upload (dibaca langsung di browser, yang dikirim cuma daftar nama &
+> kategori), dan model GLB tidak perlu diganti.
+
 > **`project_id` penting.** IfcConvert dijalankan dengan `--use-element-guids`,
 > jadi objek di GLB dinamai GlobalId (kode 22 karakter) — nama & kategori yang
 > bisa dibaca manusia hanya ada di tabel `elements`. Tanpa `project_id`, semua

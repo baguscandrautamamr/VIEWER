@@ -4,6 +4,7 @@ import { isAdminAuthed, adminPasswordConfigured } from '@/lib/adminAuth';
 import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import AdminLogin from '@/components/AdminLogin';
 import UploadModel from '@/components/UploadModel';
+import ImportElements from '@/components/ImportElements';
 import DeleteModelFileButton from '@/components/DeleteModelFileButton';
 import SheetVisibilityList, { type ManageSheet } from '@/components/SheetVisibilityList';
 import UiToggles from '@/components/UiToggles';
@@ -103,11 +104,22 @@ export default async function ManagePage({
         <div className="mb-4 rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-500">
           <p className="font-medium">{t.manage.elementsMissing}</p>
           <p className="mt-1 opacity-90">{t.manage.elementsMissingHint}</p>
-          <code className="mt-2 block break-all rounded bg-black/30 px-2 py-1 text-[11px]">
-            node scripts/ifc-to-web.mjs &lt;file.ifc&gt; {projectId}
-          </code>
         </div>
       )}
+
+      <ImportElements
+        projectId={projectId}
+        strings={{
+          title: t.manage.importTitle,
+          hint: t.manage.importHint,
+          button: t.manage.importButton,
+          reading: t.manage.importReading,
+          saving: t.manage.importSaving,
+          done: t.manage.importDone,
+          noElements: t.manage.importNoElements,
+          pickFile: t.manage.importPickFile,
+        }}
+      />
 
       <UploadModel
         projectId={projectId}

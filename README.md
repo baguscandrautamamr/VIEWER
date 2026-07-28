@@ -5,6 +5,10 @@ auto-update saat model di-push, download file RVT.
 
 Spec lengkap: lihat `REVIT-WEB-VIEWER-SETUP.md`.
 
+**Mau memodifikasi project ini?** Baca **[`CATATAN.md`](CATATAN.md)** dulu —
+berisi riwayat perubahan, peta file, konvensi commit, dan catatan jebakan
+teknis yang sudah pernah kena.
+
 ## Status
 
 Fase 1 (viewer statis) — struktur sudah jalan & `next build` hijau:

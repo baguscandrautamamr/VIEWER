@@ -16,8 +16,7 @@
     "pdfjs-dist": "^4.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "three": "^0.170.0",
-    "three-mesh-bvh": "^0.8.3"
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.1.0",

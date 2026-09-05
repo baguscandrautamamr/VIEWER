@@ -108,6 +108,7 @@ export default function ShowcaseViewer({
   // Penjelasan AI per elemen (cache di memori halaman).
   const [explanations, setExplanations] = useState<Record<string, string>>({});
   const [explaining, setExplaining] = useState(false);
+  const heavyNotified = useRef(false);
 
   const tourStrings = useMemo<TourStrings>(
     () => ({
@@ -191,7 +192,18 @@ export default function ShowcaseViewer({
         else setSide((cur) => (cur === 'inspect' ? 'none' : cur));
       }),
       engine.on('hover', setHover),
-      engine.on('stats', setStats),
+      engine.on('stats', (st) => {
+        setStats(st);
+        // Mesin bisa mematikan bayangan sendiri kalau model terlalu berat;
+        // beri tahu sekali supaya user tahu kenapa tampilannya berubah.
+        if (st.lightened) {
+          setShadows(engine.shadowsOn);
+          if (!heavyNotified.current) {
+            heavyNotified.current = true;
+            showToast(tpl(s.heavyNotice, { tri: (st.triangles / 1e6).toFixed(1) }));
+          }
+        }
+      }),
       engine.on('mode', (m) => {
         setMode(m);
         setPlanActive(false);
@@ -753,11 +765,23 @@ export default function ShowcaseViewer({
         </div>
 
         <Panel className="sc-topcenter">
-          <button type="button" className={`sc-pill ${mode === 'walk' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('walk')}>
+          <button
+            type="button"
+            title={s.modeWalk}
+            aria-label={s.modeWalk}
+            className={`sc-pill ${mode === 'walk' ? 'is-on' : ''}`}
+            onClick={() => engineRef.current?.setMode('walk')}
+          >
             {Icons.walk}
             <span className="sc-pill-label">{s.modeWalk}</span>
           </button>
-          <button type="button" className={`sc-pill ${mode === 'orbit' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('orbit')}>
+          <button
+            type="button"
+            title={s.modeOrbit}
+            aria-label={s.modeOrbit}
+            className={`sc-pill ${mode === 'orbit' ? 'is-on' : ''}`}
+            onClick={() => engineRef.current?.setMode('orbit')}
+          >
             {Icons.orbit}
             <span className="sc-pill-label">{s.modeOrbit}</span>
           </button>
@@ -1054,7 +1078,12 @@ export default function ShowcaseViewer({
             <br />
             <kbd>Esc</kbd> — {locale === 'en' ? 'close / deselect' : 'tutup / batal pilih'}
           </div>
-          <p className="mt-2 border-t border-white/10 pt-2 text-[10.5px] text-white/40">{s.approx}</p>
+          <p className="mt-2 border-t border-white/10 pt-2 text-[10.5px] text-white/40">
+            {elements.length.toLocaleString(locale === 'en' ? 'en-US' : 'id-ID')} {s.navCount.replace('{n} ', '')} ·{' '}
+            {stats ? tpl(s.statTriangles, { tri: (stats.triangles / 1e6).toFixed(1) }) : '—'} · {stats?.fps ?? 0} FPS
+            <br />
+            {s.approx}
+          </p>
         </Panel>
       )}
 

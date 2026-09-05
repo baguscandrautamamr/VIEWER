@@ -91,12 +91,23 @@ Pintasan: **E** inspeksi · **F** fokus elemen terpilih · **T** tur · **L** la
 Model Revit besar punya puluhan ribu elemen. Mode presentasi **menggabungkan
 seluruh geometri jadi dua mesh** (padat & tembus pandang) saat dimuat, jadi tiap
 frame cuma 2 draw call — bukan puluhan ribu. Sorotan/seleksi/gaya ditulis
-sebagai **warna per-vertex**, klik/hover memakai **BVH** (`three-mesh-bvh`), dan
-bayangan dirender sekali (shadow map statis). Detailnya di
-`lib/showcase/engine.ts` dan CATATAN.md (jebakan #35–#38).
+sebagai **warna per-vertex** (Uint8, 4 byte), klik/hover memakai **BVH**
+(`three-mesh-bvh`) dengan identitas per-vertex, dan bayangan dirender sekali
+(shadow map statis).
+
+Penggabungan dikerjakan **sekali** dan **dicicil per potongan** (dijadwalkan
+sendiri, bukan menumpang render loop), jadi halaman tidak pernah membeku dan
+progresnya kelihatan. Selama itu tombol **Mode teknis** tetap bisa diklik
+sebagai jalan keluar. Uji 60 ribu elemen: siap ~9 detik (sebelum diperbaiki: 64
+detik), dan biaya per frame ~5× lebih ringan daripada mode teknis pada model
+yang sama.
 
 Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
 tidak terasa. Mode teknis tetap merender per elemen seperti semula.
+
+Kalau bar progres terlihat lambat: ukuran file diteruskan sebagai
+`Content-Length` dari Drive supaya persennya benar; kalau Drive tidak
+menyebutkan ukuran, yang tampil adalah **MB terunduh** dengan bar berjalan.
 
 ### Menyimpan tur terpandu
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Readable } from 'stream';
 import { createServiceClient } from '@/lib/supabase';
-import { getDriveFileStream } from '@/lib/googleDrive';
+import { getDriveFile } from '@/lib/googleDrive';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,15 +36,16 @@ export async function GET(
   }
 
   try {
-    const nodeStream = await getDriveFileStream(data.glb_drive_file_id);
+    const { stream: nodeStream, size } = await getDriveFile(data.glb_drive_file_id);
     const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
-    return new NextResponse(webStream, {
-      headers: {
-        'Content-Type': 'model/gltf-binary',
-        // GLB per-versi bersifat immutable -> boleh di-cache lama.
-        'Cache-Control': 'public, max-age=31536000, immutable',
-      },
-    });
+    const headers: Record<string, string> = {
+      'Content-Type': 'model/gltf-binary',
+      // GLB per-versi bersifat immutable -> boleh di-cache lama.
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    };
+    // Ukuran diteruskan supaya progres unduh di viewer bisa dihitung persen.
+    if (size) headers['Content-Length'] = String(size);
+    return new NextResponse(webStream, { headers });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Gagal mengambil model dari Drive';
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -59,12 +59,28 @@ export async function createResumableUpload(
 
 // Stream file dari Drive (buat proxy /api/model/[versionId]). Node Readable.
 export async function getDriveFileStream(fileId: string): Promise<Readable> {
+  return (await getDriveFile(fileId)).stream;
+}
+
+// Sama seperti di atas, TAPI ikut mengembalikan ukuran file kalau Drive
+// menyebutkannya. Ukuran ini diteruskan sebagai Content-Length supaya viewer
+// bisa menampilkan persentase unduhan yang benar — tanpa itu bar progres
+// terlihat "macet" pada model ratusan MB.
+//
+// Ukuran hanya dipakai kalau respons TIDAK dikompresi (content-encoding
+// kosong): kalau di-gzip, content-length adalah ukuran terkompresi sedangkan
+// yang mengalir ke klien sudah didekompresi — mengirimnya akan merusak respons.
+export async function getDriveFile(fileId: string): Promise<{ stream: Readable; size: number | null }> {
   const drive = getDriveClient();
-  const res = await drive.files.get(
-    { fileId, alt: 'media' },
-    { responseType: 'stream' }
-  );
-  return res.data as unknown as Readable;
+  const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+  const raw = res.headers as unknown as { get?: (k: string) => string | null } & Record<string, string | undefined>;
+  const header = (k: string) => (typeof raw?.get === 'function' ? raw.get(k) : raw?.[k]) ?? '';
+  const encoding = String(header('content-encoding') || '').trim();
+  const len = Number(header('content-length'));
+  return {
+    stream: res.data as unknown as Readable,
+    size: !encoding && Number.isFinite(len) && len > 0 ? len : null,
+  };
 }
 
 // OAuth user (bukan service account): file .rvt dimiliki akun Google kamu

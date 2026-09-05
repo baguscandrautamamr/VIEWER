@@ -1,11 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { locales, type Locale } from '@/lib/i18n';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { DISCIPLINE_ORDER, type Discipline } from '@/lib/showcase/disciplines';
 import { fetchElementNames } from '@/lib/showcase/elementNames';
-import { ShowcaseEngine, type EngineStats, type HoverInfo, type Style } from '@/lib/showcase/engine';
+import { ShowcaseEngine, type EngineStats, type HoverInfo, type LoadProgress, type Style } from '@/lib/showcase/engine';
 import { resolveQuery } from '@/lib/showcase/search';
 import { buildAutoTour, EYE_LEVEL, type TourStrings } from '@/lib/showcase/tour';
 import { fetchSavedTour, saveTour } from '@/lib/showcase/tourStore';
@@ -36,7 +36,19 @@ interface Props {
   onOpenSheets?: () => void;
   // Admin: boleh menyusun & menyimpan tur terpandu.
   canEdit?: boolean;
+  // Saklar "Mode presentasi / Mode teknis" milik PresentClient. Dirender di
+  // dalam top bar viewer supaya tidak menabrak kontrol lain, dan tetap bisa
+  // diklik saat model masih disiapkan (jalan keluar kalau model berat).
+  modeSwitch?: ReactNode;
 }
+
+// Lebar panel & jarak tepi — dipakai untuk menghitung area bebas (insets)
+// supaya label 3D dan tooltip tidak pernah tertutup panel.
+const GAP = 14;
+const EXPLORE_W = 236;
+const SIDE_W = 300;
+const MINIMAP_W = 190;
+const TOPBAR_H = 52;
 
 type SidePanel = 'none' | 'inspect' | 'ai' | 'help' | 'tour';
 
@@ -51,6 +63,7 @@ export default function ShowcaseViewer({
   sheetCount = 0,
   onOpenSheets,
   canEdit = false,
+  modeSwitch,
 }: Props) {
   const s = locales[locale].showcase as ShowcaseStrings;
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -59,7 +72,7 @@ export default function ShowcaseViewer({
   const selLabelRef = useRef<HTMLDivElement>(null);
 
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<LoadProgress>({ value: 0, stage: 'download' });
   const [elements, setElements] = useState<ElementInfo[]>([]);
   const [mode, setMode] = useState<ViewMode>('orbit');
   const [selectedGid, setSelectedGid] = useState<string | null>(null);
@@ -243,6 +256,16 @@ export default function ShowcaseViewer({
     }
   }, [style, labels]);
 
+  // Area yang tertutup panel — label 3D, tooltip, dan label seleksi menjauhinya.
+  useEffect(() => {
+    engineRef.current?.setInsets({
+      left: GAP + EXPLORE_W + 12,
+      right: GAP + (side !== 'none' ? SIDE_W : MINIMAP_W) + 12,
+      top: TOPBAR_H + 40,
+      bottom: tourIndex >= 0 ? 160 : 92,
+    });
+  }, [side, tourIndex, loadState]);
+
   // Tur otomatis disusun ulang tiap daftar elemen berubah (nama dari DB datang).
   useEffect(() => {
     const engine = engineRef.current;
@@ -276,11 +299,18 @@ export default function ShowcaseViewer({
         return;
       }
       div.style.display = 'block';
-      div.style.transform = `translate(-50%, -100%) translate(${p.x.toFixed(0)}px, ${(p.y - 8).toFixed(0)}px)`;
+      // Jepit pakai lebar label yang SEBENARNYA supaya tidak menyelinap ke
+      // bawah panel kiri/kanan (perkiraan di engine tidak tahu lebar teks).
+      const half = div.offsetWidth / 2 + 6;
+      const w = canvasRef.current?.clientWidth ?? 0;
+      const left = GAP + EXPLORE_W + 12 + half;
+      const right = w - (GAP + (side !== 'none' ? SIDE_W : MINIMAP_W) + 12) - half;
+      const x = Math.min(Math.max(p.x, left), Math.max(left, right));
+      div.style.transform = `translate(-50%, -100%) translate(${x.toFixed(0)}px, ${(p.y - 8).toFixed(0)}px)`;
     };
     tick();
     return () => cancelAnimationFrame(raf);
-  }, [selectedGid]);
+  }, [selectedGid, side]);
 
   // ---------------------------------------------------------------- derived
   const selected = useMemo(() => (selectedGid ? engineRef.current?.getElement(selectedGid) ?? null : null), [selectedGid, elements]);
@@ -703,49 +733,54 @@ export default function ShowcaseViewer({
   const aiOn = aiConfig.configured;
 
   return (
-    <div className="sc-root">
+    <div className={`sc-root ${side !== 'none' ? 'has-side' : ''}`}>
       <div ref={canvasRef} className="sc-canvas" />
       <div ref={selLabelRef} className="sc-label-sel" style={{ display: 'none' }}>
         {selected?.name}
       </div>
 
-      {/* Brand kiri atas */}
-      <div className="sc-brand">
-        <div className="sc-brand-mark">{Icons.compass}</div>
-        <div>
-          <div className="text-[13px] font-semibold tracking-wide text-[#10201a]">{projectName}</div>
-          <div className="sc-eyebrow !text-[#10201a]/60">{s.tagline}</div>
+      {/* Satu baris atas: brand · mode kamera · saklar & status.
+          Semua dalam satu flex row supaya tidak pernah saling menimpa. */}
+      <div className="sc-topbar">
+        <div className="sc-topbar-side">
+          <div className="sc-brand">
+            <div className="sc-brand-mark">{Icons.compass}</div>
+            <div className="sc-brand-text">
+              <div className="sc-brand-name">{projectName}</div>
+              <div className="sc-eyebrow">{s.tagline}</div>
+            </div>
+          </div>
+        </div>
+
+        <Panel className="sc-topcenter">
+          <button type="button" className={`sc-pill ${mode === 'walk' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('walk')}>
+            {Icons.walk}
+            <span className="sc-pill-label">{s.modeWalk}</span>
+          </button>
+          <button type="button" className={`sc-pill ${mode === 'orbit' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('orbit')}>
+            {Icons.orbit}
+            <span className="sc-pill-label">{s.modeOrbit}</span>
+          </button>
+        </Panel>
+
+        <div className="sc-topbar-side sc-topbar-right">
+          {modeSwitch}
+          <Panel className="sc-live">
+            <span className="sc-dot" style={{ boxShadow: '0 0 8px var(--sc-accent)' }} />
+            <span className="sc-live-label">{s.live}</span>
+          </Panel>
+          <button type="button" className="sc-iconbtn" onClick={() => setSide(side === 'help' ? 'none' : 'help')} title={locales[locale].viewer.shortcuts}>
+            {Icons.help}
+          </button>
         </div>
       </div>
 
-      {/* Mode jalan / orbit */}
-      <Panel className="sc-topcenter">
-        <button type="button" className={`sc-pill ${mode === 'walk' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('walk')}>
-          {Icons.walk}
-          {s.modeWalk}
-        </button>
-        <button type="button" className={`sc-pill ${mode === 'orbit' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('orbit')}>
-          {Icons.orbit}
-          {s.modeOrbit}
-        </button>
-      </Panel>
-
-      {/* Kanan atas: live + bantuan */}
-      <div className="sc-topright">
-        <Panel className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-white/80">
-          <span className="sc-dot" style={{ boxShadow: '0 0 8px var(--sc-accent)' }} />
-          {s.live}
-        </Panel>
-        <button type="button" className="sc-brand-mark !text-white/70 hover:!text-white" onClick={() => setSide(side === 'help' ? 'none' : 'help')} title="?">
-          {Icons.help}
-        </button>
-      </div>
-      {areaLabel && (
+      {areaLabel && loadState === 'ready' && (
         <Panel className="sc-area">
           <span className="text-[color:var(--sc-accent)]">{Icons.pin}</span>
-          {areaLabel}
+          <span className="truncate">{areaLabel}</span>
           {stats && mode === 'walk' && (
-            <span className="sc-mono text-white/45">· {s.eyeLevel} {stats.eyeHeight.toFixed(1)} m</span>
+            <span className="sc-mono shrink-0 text-white/45">· {stats.eyeHeight.toFixed(1)} m</span>
           )}
         </Panel>
       )}
@@ -832,12 +867,17 @@ export default function ShowcaseViewer({
         </>
       )}
       {mode === 'orbit' && hoveredEl && hover && hoveredEl.gid !== selectedGid && (
-        <Panel className="sc-hover" style={{ left: hover.x, top: hover.y }}>
+        <Panel
+          className={`sc-hover ${hover.x > (canvasRef.current?.clientWidth ?? 0) - 320 ? 'is-flip' : ''}`}
+          style={{ left: hover.x, top: hover.y }}
+        >
           {hoveredEl.name} <span className="text-white/45">· {hoveredEl.categoryLabel}</span>
         </Panel>
       )}
 
-      {/* Bawah tengah: tur atau dock */}
+      {/* Bawah tengah: tur atau dock. Dibungkus .sc-bottombar yang lebarnya
+          menyesuaikan ruang bebas antara panel kiri dan minimap. */}
+      <div className="sc-bottombar">
       {loadState === 'ready' && tourIndex >= 0 ? (
         <TourCard
           stops={tourStops}
@@ -881,9 +921,10 @@ export default function ShowcaseViewer({
           </Panel>
         )
       )}
+      </div>
 
       {/* Minimap kanan bawah */}
-      <Panel className="sc-minimap">
+      <Panel className={`sc-minimap ${loadState === 'ready' ? '' : 'sc-hidden'}`}>
         <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] text-white/70">
           <span className="text-[color:var(--sc-accent)]">{Icons.compass}</span>
           {s.minimap}
@@ -896,18 +937,17 @@ export default function ShowcaseViewer({
           }}
         />
         <div className="sc-mono mt-1.5 flex items-center justify-between text-white/45">
-          <span>{mode === 'walk' ? s.eyeLevel : s.groundLevel}</span>
-          <span className="text-white/75">{stats ? `${stats.eyeHeight.toFixed(1)} m` : '—'}</span>
+          <span>
+            {mode === 'walk' ? s.eyeLevel : s.groundLevel}{' '}
+            <span className="text-white/75">{stats ? `${stats.eyeHeight.toFixed(1)} m` : '—'}</span>
+          </span>
+          <span>{stats ? `${stats.fps} FPS` : ''}</span>
         </div>
       </Panel>
 
-      {/* Status kiri bawah */}
+      {/* Status kiri bawah — satu baris, di bawah panel kiri */}
       <div className="sc-status">
-        <span>{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
-      </div>
-      <div className="sc-status sc-status-r">
-        {stats && <span>{stats.fps} FPS</span>}
-        <span>{s.approx}</span>
+        <span className="truncate">{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
       </div>
 
       {/* Panel kanan */}
@@ -1014,6 +1054,7 @@ export default function ShowcaseViewer({
             <br />
             <kbd>Esc</kbd> — {locale === 'en' ? 'close / deselect' : 'tutup / batal pilih'}
           </div>
+          <p className="mt-2 border-t border-white/10 pt-2 text-[10.5px] text-white/40">{s.approx}</p>
         </Panel>
       )}
 
@@ -1038,11 +1079,24 @@ export default function ShowcaseViewer({
               <span className="text-[color:var(--sc-accent)]">{Icons.compass}</span>
               {projectName}
             </div>
-            <p className="mt-1 text-[11.5px] text-white/60">{loadState === 'error' ? s.loadError : s.loading}</p>
+            <p className="mt-1 text-[11.5px] text-white/60">
+              {loadState === 'error'
+                ? s.loadError
+                : progress.stage === 'download'
+                  ? progress.total
+                    ? `${s.loadingDownload} ${Math.round(progress.value / 0.55)}%`
+                    : progress.bytes
+                      ? `${s.loadingDownload} ${(progress.bytes / 1048576).toFixed(1)} MB`
+                      : s.loadingDownload
+                  : `${s.loadingPrepare} ${Math.round(((progress.value - 55) / 45) * 100)}%`}
+            </p>
             {loadState === 'loading' && (
-              <div className="sc-bar mt-3">
-                <span style={{ width: `${progress}%` }} />
-              </div>
+              <>
+                <div className={`sc-bar mt-3 ${progress.stage === 'download' && !progress.total ? 'is-indeterminate' : ''}`}>
+                  <span style={{ width: `${Math.max(2, progress.value)}%` }} />
+                </div>
+                <p className="mt-2 text-[10.5px] leading-snug text-white/40">{s.loadingHeavy}</p>
+              </>
             )}
           </Panel>
         </div>

@@ -19,7 +19,7 @@ const RE =
 // Buang entity yang tidak mungkin punya geometri di GLB: tipe/definisi, relasi,
 // property set, port koneksi, dan pembungkus spasial.
 const EXCLUDE_EXACT = new Set([
-  'PROJECT', 'SITE', 'BUILDING', 'BUILDINGSTOREY', 'DISTRIBUTIONPORT',
+  'PROJECT', 'BUILDING', 'BUILDINGSTOREY', 'DISTRIBUTIONPORT',
 ]);
 
 // Entity yang BUKAN benda fisik, tapi IfcConvert sering tetap mengekspor
@@ -32,7 +32,7 @@ const EXCLUDE_EXACT = new Set([
 // Sekarang tetap dicatat, tapi kategorinya DIPAKSA satu per tipe (bukan dari
 // nama family — nama grid isinya cuma "A"/"1", bisa jadi puluhan kategori
 // sampah), supaya di viewer bisa langsung dikenali & dimatikan sekaligus.
-const NON_PHYSICAL = new Set(['SPACE', 'OPENINGELEMENT', 'ANNOTATION', 'GRID', 'GRIDAXIS']);
+const NON_PHYSICAL = new Set(['SITE', 'SPACE', 'OPENINGELEMENT', 'ANNOTATION', 'GRID', 'GRIDAXIS']);
 
 function isExcluded(type) {
   return (

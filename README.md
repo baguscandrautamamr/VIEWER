@@ -38,6 +38,9 @@ itu langkah berikutnya di Fase 1 (lihat spec bagian 8).
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | Refresh token, diambil sekali via `scripts/get-refresh-token.mjs` |
 | `GOOGLE_DRIVE_FOLDER_ID` | Folder tujuan upload file RVT |
+| `ANTHROPIC_API_KEY` | (Opsional) Kunci Messages API untuk **Asisten AI** di viewer presentasi. Server-side only. Tanpa ini fitur AI otomatis disembunyikan |
+| `ANTHROPIC_BASE_URL` | (Opsional) Proxy yang kompatibel Messages API, mis. `https://api.vikey.ai` |
+| `AI_MODEL` | (Opsional) Model AI. Bawaan `claude-opus-5`; lewat proxy vikey bisa `openai/gpt-5.6-luna` |
 
 Copy `.env.local.example` ke `.env.local` dan isi value asli sebelum `npm run dev`.
 
@@ -55,7 +58,61 @@ npm run build    # production build
 npm start        # jalankan hasil build
 ```
 
-## Fitur viewer 3D
+## Mode presentasi (viewer untuk client) + Asisten AI
+
+Halaman `/present/[projectId]` sekarang punya **dua wajah**, dipilih lewat saklar
+di tengah-atas viewer (pilihan diingat di browser):
+
+- **Mode presentasi** (bawaan) — `components/showcase/*`, tampilan gaya
+  *virtual plant tour*: model monokrom abu-abu dengan sorotan hijau, lantai grid
+  + bayangan lembut, panel gelap kaca. Dibuat untuk dipertontonkan ke client.
+- **Mode teknis** — viewer lama (`components/ModelViewer.tsx`): ukur, section
+  box, coret markup, pohon struktur, dll. Semua fitur lama tetap ada.
+
+### Isi mode presentasi
+
+| Bagian | Fungsi |
+|---|---|
+| **Mode jalan / Mode orbit** (tengah atas) | Jalan kaki di eye level 1,7 m (**W/A/S/D**, Shift lari, **Q/E** turun/naik, seret untuk menoleh, roda mouse maju/mundur) atau orbit biasa |
+| **Jelajahi model** (panel kiri) | Cari elemen, label elemen, **sorot sistem** per disiplin (Struktur / Arsitektur / MEP / Tapak — dideteksi dari nama family), denah 2D/3D, titik pandang (pemberhentian tur + preset tinggi mata), gaya monokrom/warna asli, bayangan, putar otomatis, reset, kembali ke pintu masuk, simpan gambar PNG |
+| **Tur terpandu** (dock bawah) | Pemberhentian dibuat **otomatis** dari isi model: ikhtisar → tiap disiplin (disorot hijau) → jalan kaki → tampak atas. Kamera beranimasi antar pemberhentian. Tombol **Narasi AI** menulis ulang judul + narasi tiap pemberhentian |
+| **Navigator elemen** (dock bawah, atau `/`) | Cari nama/kategori/kata kunci, hasil dikelompokkan per kategori, klik → kamera terbang & elemen disorot |
+| **Inspeksi elemen** (panel kanan) | Muncul saat objek diklik (atau **E** di mode jalan pada objek di tengah layar): nama, kategori, GlobalId, dimensi & elevasi dari kotak batas, elemen sejenis & sekitar, **Jelaskan dengan AI**, ke elemen, sorot sejenis |
+| **Asisten AI** (dock bawah) | Obrolan tentang model. AI menerima ringkasan model (kategori, jumlah, contoh nama, elemen terpilih) dan bisa **menggerakkan viewer**: terbang ke elemen/kategori, menyorot, ganti mode jalan/orbit/denah, mulai tur, label |
+| **Navigasi skematik** (kanan bawah) | Minimap tampak atas: jejak elemen, posisi & arah kamera, nomor pemberhentian tur. Klik minimap = pindah ke titik itu |
+| Chip kanan atas | Area terdekat (dari pemberhentian tur) + tinggi mata |
+
+Pintasan: **E** inspeksi · **F** fokus elemen terpilih · **T** tur · **L** label ·
+**R** reset · **/** cari · **Esc** tutup.
+
+### Cara kerja AI (dan keamanannya)
+
+- Browser memanggil `POST /api/ai`; route itu yang memanggil Messages API lewat
+  SDK resmi `@anthropic-ai/sdk`. **Kunci API tidak pernah sampai ke browser.**
+- Route dijaga token akses client (`?t=` di link presentasi, dicek ke
+  `projects.client_access_token`) + pembatas laju per IP, supaya endpoint tidak
+  bisa dipakai orang luar untuk membakar kuota.
+- Model diminta menulis aksi sebagai baris `[[action:{...}]]` di dalam
+  jawabannya (format teks, bukan tool-use API) — sengaja, supaya jalan di semua
+  model/proxy yang kompatibel Messages API, termasuk model non-Claude lewat proxy
+  seperti vikey. Viewer memparse baris itu, menjalankan aksinya, dan
+  menyembunyikannya dari teks. Daftar aksi: `lib/showcase/aiActions.ts`.
+- Konteks yang dikirim ringkas (`lib/showcase/aiPrompt.ts`): ukuran model,
+  jumlah elemen per kategori/disiplin + maksimal 4 contoh nama per kategori,
+  elemen terpilih + 5 tetangganya. Model besar (puluhan ribu elemen) tetap
+  hemat token.
+- Tanpa `ANTHROPIC_API_KEY`, `GET /api/ai` menjawab `configured: false` dan
+  semua tombol AI disembunyikan — viewer tetap berfungsi penuh.
+
+Set env di Vercel (Production & Preview), lalu redeploy:
+
+```
+ANTHROPIC_API_KEY=<kunci>
+ANTHROPIC_BASE_URL=https://api.vikey.ai      # kalau lewat vikey
+AI_MODEL=openai/gpt-5.6-luna                  # atau kosongkan -> claude-opus-5
+```
+
+## Fitur viewer 3D (mode teknis)
 
 ### Kontrol navigasi
 

@@ -11,3 +11,4 @@ next-env.d.ts
 revit-addin/bin/
 revit-addin/obj/
 revit-addin/revit-web-viewer.config.json
+tsconfig.tsbuildinfo

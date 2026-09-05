@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ModelViewer from './ModelViewer';
+import ShowcaseViewer from './showcase/ShowcaseViewer';
 import SheetViewer from './SheetViewer';
-import type { Locale } from '@/lib/i18n';
+import { locales, type Locale } from '@/lib/i18n';
 
 export interface ModelFileOption {
   id: string;
@@ -24,12 +25,19 @@ interface SheetStrings {
   selectHint: string;
 }
 
+type ViewerMode = 'showcase' | 'technical';
+const VIEWER_MODE_KEY = 'rwv_viewer_mode';
+
 // Panel presentasi: kiri viewer 3D (+ dropdown model), kanan sidebar sheet yang
-// bisa dibuka/tutup. Sidebar berisi preview pane (sheet aktif) + daftar sheet
+// bisa dibuka/tutup. Viewer punya dua wajah: MODE PRESENTASI (ShowcaseViewer —
+// gaya video referensi: jalan/orbit, tur, navigator, AI) untuk client, dan
+// MODE TEKNIS (ModelViewer — ukur, section, markup, struktur) untuk tim. Sidebar berisi preview pane (sheet aktif) + daftar sheet
 // gaya "detail view" (baris ringkas). Klik sheet -> pindah kamera 3D ke preset
 // sheet itu (Fase 3a) sekaligus tampilkan PDF-nya di preview pane.
 export default function PresentClient({
   projectId,
+  projectName,
+  accessToken,
   files,
   fallbackUrl,
   locale = 'id',
@@ -37,12 +45,32 @@ export default function PresentClient({
   sheetStrings,
 }: {
   projectId: string;
+  projectName: string;
+  accessToken: string;
   files: ModelFileOption[];
   fallbackUrl: string | null;
   locale?: Locale;
   sheets: SheetItem[];
   sheetStrings: SheetStrings;
 }) {
+  // Mode viewer: bawaannya presentasi; pilihan diingat di browser.
+  const [viewerMode, setViewerMode] = useState<ViewerMode>('showcase');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(VIEWER_MODE_KEY) === 'technical') setViewerMode('technical');
+    } catch {
+      /* abaikan */
+    }
+  }, []);
+  function switchMode(m: ViewerMode) {
+    setViewerMode(m);
+    try {
+      localStorage.setItem(VIEWER_MODE_KEY, m);
+    } catch {
+      /* abaikan */
+    }
+  }
+  const sc = locales[locale].showcase;
   const [selected, setSelected] = useState<string | null>(files[0]?.id ?? null);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   // Bump counter tiap klik supaya klik sheet yang sama pun memicu re-apply.
@@ -64,8 +92,14 @@ export default function PresentClient({
     <div className="relative flex flex-1 gap-4 overflow-hidden">
       {/* Viewer 3D */}
       <div className="relative min-w-0 flex-1 rounded border border-foreground/15">
-        {files.length > 1 && (
-          <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2">
+        {/* Baris tengah-atas: dropdown model (bila >1) + saklar mode viewer.
+            Di mode presentasi digeser ke bawah pil Jalan/Orbit milik
+            ShowcaseViewer; di mode teknis menempel di atas. */}
+        <div
+          className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-2"
+          style={{ top: viewerMode === 'showcase' ? '3.2rem' : '0.75rem' }}
+        >
+          {files.length > 1 && (
             <select
               value={selected ?? ''}
               onChange={(e) => setSelected(e.target.value)}
@@ -77,9 +111,34 @@ export default function PresentClient({
                 </option>
               ))}
             </select>
+          )}
+          <div className="flex gap-0.5 rounded-md border border-white/15 bg-black/60 p-0.5 text-[11px] text-white backdrop-blur">
+            <button
+              onClick={() => switchMode('showcase')}
+              className={`rounded px-2 py-0.5 ${viewerMode === 'showcase' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
+            >
+              {sc.showcaseMode}
+            </button>
+            <button
+              onClick={() => switchMode('technical')}
+              className={`rounded px-2 py-0.5 ${viewerMode === 'technical' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
+            >
+              {sc.techMode}
+            </button>
           </div>
-        )}
-        {url ? (
+        </div>
+        {url && viewerMode === 'showcase' ? (
+          <ShowcaseViewer
+            key={`sc-${url}`}
+            projectId={projectId}
+            projectName={projectName}
+            accessToken={accessToken}
+            glbUrl={url}
+            locale={locale}
+            sheetCount={sheets.length}
+            onOpenSheets={() => setSidebarOpen((v) => !v)}
+          />
+        ) : url ? (
           <ModelViewer
             key={url}
             projectId={projectId}

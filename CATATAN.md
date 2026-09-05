@@ -105,6 +105,45 @@ Website presentasi model Revit ke client:
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
+### 5 September 2026 (malam)
+- **Fix: model besar bikin halaman "stuck" di layar Menyiapkan model 3D.**
+  Tiga sebab, semuanya diperbaiki: (1) penggabungan geometri dijalankan DUA
+  KALI (sekali saat model dimuat, sekali lagi saat nama elemen datang dari
+  database) — sekarang sekali saja, nama yang datang belakangan hanya
+  memperbarui teks; (2) tiap vertex menyimpan 4 array warna Float32 (48 byte)
+  — sekarang 1 array Uint8 + 1 warna asli Uint8 (8 byte), sisanya konstanta,
+  jadi memori puncak turun drastis dan geometri sumber dilepas begitu selesai
+  disalin; (3) penggabungan menumpang render loop, padahal di mesin lambat
+  satu frame bisa ratusan ms — sekarang dijadwalkan sendiri
+  (`setTimeout`, jatah 24 ms per potongan) dan menggambar direm jadi ~4 fps
+  selama menyiapkan. Uji 60.062 elemen di sandbox (software GL): siap dalam
+  **9,1 detik** vs **64,4 detik** sebelum perbaikan
+- **Fix: klik memilih elemen yang SALAH pada model besar.** `three-mesh-bvh`
+  mengurutkan ulang index buffer saat membangun BVH, sedangkan pemetaan
+  "nomor segitiga → elemen" mengandalkan urutan asli. Identitas dipindah ke
+  penanda per-VERTEX (`vertexEid`, di CPU saja) yang tidak ikut terurut
+- **Upload GPU jadi parsial.** Tiap potongan penggabungan sempat memanggil
+  `needsUpdate = true` pada seluruh buffer — three lalu mengirim ULANG seluruh
+  posisi/normal/index (bisa ratusan MB) tiap potongan. Sekarang pakai
+  `addUpdateRange` hanya untuk potongan yang baru disalin
+- **InstancedMesh tidak lagi hilang.** Versi sebelumnya melewati
+  `isInstancedMesh` saat menggabung, jadi objek hasil GPU instancing lenyap
+  dari tampilan. Sekarang tiap instance dibentangkan jadi potongan sendiri
+- **Progres unduh jujur.** `/api/model/[versionId]` & `/api/model-file/[id]`
+  meneruskan `Content-Length` dari Drive (hanya kalau respons tidak
+  di-gzip), jadi bar progres menunjukkan persen sebenarnya; kalau ukuran
+  tidak diketahui, yang tampil MB terunduh + bar berjalan — bukan persen palsu
+  yang terlihat macet. Saklar **Mode teknis** ikut dirender di atas layar
+  loading sebagai jalan keluar kalau model terlalu berat
+- **Tata letak overlay dirombak supaya tidak tumpang tindih.** Baris atas jadi
+  satu flex row (brand · mode kamera · saklar mode + live + bantuan), kolom
+  kiri/kanan dan baris bawah memakai variabel jarak yang sama
+  (`--sc-right-inset` bergeser saat panel samping terbuka), dock/kartu tur
+  otomatis menyusut di antara panel kiri dan minimap, chip area & minimap ikut
+  bergeser, status kiri bawah dipendekkan, label 3D & tooltip menghindari area
+  panel lewat `engine.setInsets()`. Diuji otomatis: kotak semua overlay
+  dibandingkan berpasangan di 1400/1100/900 px × 4 kondisi — nol perpotongan
+
 ### 5 September 2026 (sore)
 - **Performa mode presentasi: geometri digabung.** Keluhan "3D sangat lambat
   saat navigasi" di model asli. Penyebab: tiap elemen = 1 mesh = 1 draw call
@@ -633,3 +672,33 @@ Detail lengkap ada di `README.md`.
     tersimpan memakai `goTo(pose,'orbit')` lalu mengunci putaran — supaya
     denah yang disimpan admin (zoom/posisi tertentu) tidak ditimpa pose
     otomatis.
+
+41. **Jangan menggabungkan geometri lebih dari sekali.** Nama & kategori dari
+    tabel `elements` datang setelah model dimuat; menyusun ulang geometri
+    untuk itu berarti mengerjakan pekerjaan terberat dua kali. Pembagian
+    padat/tembus pandang karena itu diputuskan dari MATERIAL saja (opacity),
+    bukan kategori. Kategori non-fisik (IFCSPACE dll.) ditangani saat
+    memilih: kalau sinar mengenainya, dicari lagi benda nyata di belakangnya.
+
+42. **`needsUpdate = true` tanpa `addUpdateRange` = kirim ulang SELURUH
+    buffer.** three baru mengirim sebagian kalau `updateRanges` diisi, dan ia
+    membersihkan daftar itu sendiri setelah upload. Satuannya elemen array
+    (posisi itemSize 3 -> `vStart * 3`), bukan jumlah vertex.
+
+43. **BVH mengurutkan ulang index buffer.** Jangan pernah memetakan
+    `hit.faceIndex` ke data sendiri kalau geometri punya `boundsTree` —
+    urutannya sudah berubah. Pakai `hit.face.a` (indeks VERTEX, tidak ikut
+    berubah) ke tabel per-vertex.
+
+44. **Pekerjaan berat jangan menumpang render loop.** Kalau satu frame lambat
+    (GPU lemah, software rendering, layar besar), pekerjaan yang dicicil di
+    dalam `requestAnimationFrame` ikut merayap. Jadwalkan sendiri dengan
+    `setTimeout` dan rem penggambaran selama proses berlangsung.
+
+45. **Tata letak overlay pakai variabel jarak bersama, bukan angka lepas.**
+    `--sc-right-inset` berubah saat panel samping terbuka, dan minimap, chip
+    area, serta baris bawah semuanya mengikutinya. Panel baru WAJIB ikut pola
+    ini, dan area yang ditempati panel harus dikabarkan ke mesin lewat
+    `engine.setInsets()` supaya label 3D tidak menyelinap ke bawah panel.
+    Uji tumpang tindih ada di `scratchpad/overlap.mjs` (kotak semua overlay
+    dibandingkan berpasangan).

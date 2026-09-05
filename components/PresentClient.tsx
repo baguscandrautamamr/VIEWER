@@ -73,6 +73,7 @@ export default function PresentClient({
     }
   }
   const sc = locales[locale].showcase;
+
   const [selected, setSelected] = useState<string | null>(files[0]?.id ?? null);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   // Bump counter tiap klik supaya klik sheet yang sama pun memicu re-apply.
@@ -82,6 +83,39 @@ export default function PresentClient({
   const [sidebarOpen, setSidebarOpen] = useState(sheets.length > 0);
 
   const url = selected ? `/api/model-file/${selected}` : fallbackUrl;
+
+  // Dipakai di dua tempat (di dalam top bar mode presentasi, atau mengambang
+  // di mode teknis) — dibuat sekali di sini supaya perilakunya sama.
+  const modelPicker =
+    files.length > 1 ? (
+      <select
+        value={selected ?? ''}
+        onChange={(e) => setSelected(e.target.value)}
+        className="max-w-[150px] rounded-md border border-white/15 bg-black/60 px-2 py-1 text-[11px] text-white backdrop-blur"
+      >
+        {files.map((f) => (
+          <option key={f.id} value={f.id} className="text-black">
+            {f.label}
+          </option>
+        ))}
+      </select>
+    ) : null;
+  const modeSwitch = (
+    <div className="flex gap-0.5 rounded-md border border-white/15 bg-black/60 p-0.5 text-[11px] text-white backdrop-blur">
+      <button
+        onClick={() => switchMode('showcase')}
+        className={`rounded px-2 py-1 ${viewerMode === 'showcase' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
+      >
+        {sc.showcaseMode}
+      </button>
+      <button
+        onClick={() => switchMode('technical')}
+        className={`rounded px-2 py-1 ${viewerMode === 'technical' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
+      >
+        {sc.techMode}
+      </button>
+    </div>
+  );
   const active = sheets.find((s) => s.id === activeSheet) ?? null;
 
   function onSheetClick(s: SheetItem) {
@@ -97,38 +131,15 @@ export default function PresentClient({
         {/* Baris tengah-atas: dropdown model (bila >1) + saklar mode viewer.
             Di mode presentasi digeser ke bawah pil Jalan/Orbit milik
             ShowcaseViewer; di mode teknis menempel di atas. */}
-        <div
-          className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-2"
-          style={{ top: viewerMode === 'showcase' ? '3.2rem' : '0.75rem' }}
-        >
-          {files.length > 1 && (
-            <select
-              value={selected ?? ''}
-              onChange={(e) => setSelected(e.target.value)}
-              className="rounded border border-white/20 bg-black/60 px-2 py-1 text-xs text-white backdrop-blur"
-            >
-              {files.map((f) => (
-                <option key={f.id} value={f.id} className="text-black">
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          )}
-          <div className="flex gap-0.5 rounded-md border border-white/15 bg-black/60 p-0.5 text-[11px] text-white backdrop-blur">
-            <button
-              onClick={() => switchMode('showcase')}
-              className={`rounded px-2 py-0.5 ${viewerMode === 'showcase' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
-            >
-              {sc.showcaseMode}
-            </button>
-            <button
-              onClick={() => switchMode('technical')}
-              className={`rounded px-2 py-0.5 ${viewerMode === 'technical' ? 'bg-white/20 font-medium' : 'opacity-60 hover:opacity-100'}`}
-            >
-              {sc.techMode}
-            </button>
+        {/* Mode presentasi merender saklar ini DI DALAM top bar-nya sendiri
+            (lihat prop `modeSwitch`) supaya tidak menabrak kontrol lain; di
+            mode teknis bagian tengah-atas kosong, jadi ditaruh mengambang. */}
+        {viewerMode === 'technical' && (
+          <div className="absolute left-1/2 top-3 z-40 flex -translate-x-1/2 items-center gap-2">
+            {modelPicker}
+            {modeSwitch}
           </div>
-        </div>
+        )}
         {url && viewerMode === 'showcase' ? (
           <ShowcaseViewer
             key={`sc-${url}`}
@@ -140,6 +151,12 @@ export default function PresentClient({
             sheetCount={sheets.length}
             onOpenSheets={() => setSidebarOpen((v) => !v)}
             canEdit={canEdit}
+            modeSwitch={
+              <>
+                {modelPicker}
+                {modeSwitch}
+              </>
+            }
           />
         ) : url ? (
           <ModelViewer

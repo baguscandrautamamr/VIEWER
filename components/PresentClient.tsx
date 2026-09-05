@@ -38,6 +38,7 @@ export default function PresentClient({
   projectId,
   projectName,
   accessToken,
+  canEdit = false,
   files,
   fallbackUrl,
   locale = 'id',
@@ -47,6 +48,7 @@ export default function PresentClient({
   projectId: string;
   projectName: string;
   accessToken: string;
+  canEdit?: boolean;
   files: ModelFileOption[];
   fallbackUrl: string | null;
   locale?: Locale;
@@ -137,6 +139,7 @@ export default function PresentClient({
             locale={locale}
             sheetCount={sheets.length}
             onOpenSheets={() => setSidebarOpen((v) => !v)}
+            canEdit={canEdit}
           />
         ) : url ? (
           <ModelViewer

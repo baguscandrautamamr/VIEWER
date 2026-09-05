@@ -34,6 +34,7 @@ Website presentasi model Revit ke client:
 | Semua isi viewer 3D (kontrol, tool, kamera) | `components/ModelViewer.tsx` |
 | **Mode presentasi** — tampilan & panel (React) | `components/showcase/ShowcaseViewer.tsx` (+ `ExplorePanel`, `TourCard`, `EquipmentNavigator`, `InspectionPanel`, `AiPanel`, `ui.tsx`) |
 | Mesin 3D mode presentasi (Three.js murni: material, kamera, jalan kaki, label, minimap) | `lib/showcase/engine.ts` |
+| Tur tersimpan: tabel, endpoint, editor | `supabase/schema.sql` (`tour_stops`), `app/api/tour/route.ts`, `lib/showcase/tourStore.ts`, `components/showcase/TourEditor.tsx` |
 | Tur otomatis (pose kamera per pemberhentian) | `lib/showcase/tour.ts` |
 | Pengelompokan disiplin (Struktur/Arsitektur/MEP) dari nama family | `lib/showcase/disciplines.ts` |
 | Pencarian elemen & penerjemah query AI → elemen | `lib/showcase/search.ts` |
@@ -103,6 +104,29 @@ Website presentasi model Revit ke client:
 ## Riwayat Perubahan
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
+
+### 5 September 2026 (sore)
+- **Performa mode presentasi: geometri digabung.** Keluhan "3D sangat lambat
+  saat navigasi" di model asli. Penyebab: tiap elemen = 1 mesh = 1 draw call
+  (puluhan ribu per frame, ×2 karena shadow pass) + raycast hover ke semua
+  mesh. Sekarang `lib/showcase/engine.ts` menyalin seluruh model ke DUA
+  geometri gabungan (padat & tembus pandang) dengan warna RGBA per-vertex;
+  sorotan/seleksi/gaya cukup menulis ulang rentang vertex milik elemen
+  (upload parsial `addUpdateRange` kalau ≤300 elemen). Raycast pakai BVH
+  (`three-mesh-bvh`, dibangun setelah frame pertama), shadow map statis
+  (`autoUpdate=false`), pixel ratio dibatasi 1,5. Uji 30.062 elemen di
+  sandbox (software GL): ~264 ms/frame vs ~1.031 ms/frame mode teknis; di GPU
+  sungguhan selisihnya jauh lebih besar karena yang hilang adalah overhead
+  draw call
+- **Tur terpandu bisa disusun & disimpan.** Tabel baru `tour_stops`
+  (schema.sql, idempotent), route `app/api/tour` (GET token client; PUT
+  admin), editor `components/showcase/TourEditor.tsx` (dock **Susun tur**,
+  hanya `canEdit` = admin). Pemberhentian menyimpan pose kamera, mode
+  (jalan/orbit/denah), dan sorotan aktif (daftar gid atau kategori disiplin).
+  Kalau ada tur tersimpan, itu yang dipakai; kalau kosong, tur otomatis
+- **MEP dipecah** jadi Elektrikal & elektronik, Plumbing, HVAC, Proses,
+  Pemadam kebakaran (`lib/showcase/disciplines.ts`, aturan kata kunci dengan
+  urutan prioritas). Berlaku ke sorot sistem, tur otomatis, konteks AI
 
 ### 5 September 2026
 - **Mode presentasi + Asisten AI.** Viewer baru `components/showcase/*` yang
@@ -570,3 +594,42 @@ Detail lengkap ada di `README.md`.
     `.sc-result`.** Kalau menulis uji otomatis, pakai selektor
     `.sc-modal .sc-result` — klik ke `.sc-result` pertama bisa mengenai daftar
     "Di sekitarnya" di panel inspeksi yang tertutup backdrop modal.
+
+35. **Mode presentasi menggabungkan geometri — jangan cari `THREE.Mesh` per
+    elemen.** Setelah dimuat, model = 2 mesh gabungan; elemen hanya punya
+    daftar RENTANG vertex/segitiga (`ElementRecord.ranges`). Sembunyikan/
+    ubah warna/pilih = tulis warna RGBA per vertex pada rentang itu (alpha 0
+    kalau mau "menyembunyikan"). Raycast mengembalikan `faceIndex` → gid lewat
+    binary search di `MergedPart.tri`. Kalau butuh fitur per-elemen baru,
+    kerjakan lewat rentang ini, bukan menambah mesh.
+
+36. **Sumber GLB dipertahankan sampai nama dari DB datang.** Nama/kategori
+    mempengaruhi pembagian padat vs tembus (kategori non-fisik seperti
+    IFCSPACE dipindah ke bagian tembus pandang), jadi `applyNames()` menyusun
+    ulang geometri dari sumber, baru sumber dibuang (`sourceRoot = null`).
+    Memori dobel hanya sebentar. Kalau `elements` kosong di DB, sumber tetap
+    dipegang — wajar, cuma memori lebih besar.
+
+37. **BVH dibangun setelah frame pertama; sebelum siap, klik diabaikan.**
+    Model jutaan segitiga butuh beberapa detik untuk BVH. Supaya layar tidak
+    beku saat model baru tampil, BVH dijadwalkan lewat `setTimeout` per
+    bagian. `pickNdc()` melewati bagian yang `bvhReady=false`.
+
+38. **Shadow map statis: set `renderer.shadowMap.needsUpdate = true` setiap
+    kali ada yang berubah di scene** (model diganti, lampu digeser, bayangan
+    di-toggle). Warna vertex tidak mempengaruhi bayangan, jadi sorotan tidak
+    perlu memicu update. Kalau bayangan "tertinggal" setelah perubahan baru,
+    hampir pasti lupa baris ini.
+
+39. **Kata "column" ≠ proses.** Aturan disiplin proses sempat memuat
+    `column|tower`, akibatnya semua kolom struktur masuk "Proses". Aturan
+    diuji berurutan (pemadam → HVAC → proses → plumbing → elektrikal →
+    struktur → arsitektur); kata generik harus ditaruh di aturan yang paling
+    mungkin benar untuk model gedung, atau dibuat spesifik
+    (`distillation`, `cooling column`).
+
+40. **Pemberhentian tur denah (`plan`) dari editor menyimpan pose apa adanya.**
+    Tur otomatis memakai `engine.plan()` (pose dihitung dari bounds), tur
+    tersimpan memakai `goTo(pose,'orbit')` lalu mengunci putaran — supaya
+    denah yang disimpan admin (zoom/posisi tertentu) tidak ditimpa pose
+    otomatis.

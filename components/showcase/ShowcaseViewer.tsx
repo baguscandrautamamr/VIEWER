@@ -1,0 +1,918 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { locales, type Locale } from '@/lib/i18n';
+import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
+import { DISCIPLINE_ORDER, type Discipline } from '@/lib/showcase/disciplines';
+import { fetchElementNames } from '@/lib/showcase/elementNames';
+import { ShowcaseEngine, type EngineStats, type HoverInfo, type Style } from '@/lib/showcase/engine';
+import { resolveQuery } from '@/lib/showcase/search';
+import { buildAutoTour, EYE_LEVEL, type TourStrings } from '@/lib/showcase/tour';
+import type { AiAction, AiContext, CategorySummary, ElementInfo, TourStop, ViewMode } from '@/lib/showcase/types';
+import AiPanel, { useAiChat } from './AiPanel';
+import EquipmentNavigator from './EquipmentNavigator';
+import ExplorePanel, { type Viewpoint } from './ExplorePanel';
+import InspectionPanel from './InspectionPanel';
+import TourCard from './TourCard';
+import { Icons, Panel, tpl, type ShowcaseStrings } from './ui';
+
+// Viewer PRESENTASI (gaya video referensi "Plant / Field"): pengalaman untuk
+// client — mode jalan/orbit, tur terpandu, navigator & inspeksi elemen,
+// label, minimap, dan asisten AI. Viewer teknis lama (ModelViewer.tsx) tetap
+// ada sebagai "Mode teknis" untuk ukur/section/markup.
+//
+// Semua yang berjalan tiap frame ada di lib/showcase/engine.ts; komponen ini
+// hanya memegang state UI dan mendengarkan event mesin.
+
+interface Props {
+  projectId: string;
+  projectName: string;
+  accessToken: string;
+  glbUrl: string;
+  locale?: Locale;
+  sheetCount?: number;
+  onOpenSheets?: () => void;
+}
+
+type SidePanel = 'none' | 'inspect' | 'ai' | 'help';
+
+const PREFS_KEY = 'rwv_showcase';
+
+export default function ShowcaseViewer({
+  projectId,
+  projectName,
+  accessToken,
+  glbUrl,
+  locale = 'id',
+  sheetCount = 0,
+  onOpenSheets,
+}: Props) {
+  const s = locales[locale].showcase as ShowcaseStrings;
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const engineRef = useRef<ShowcaseEngine | null>(null);
+  const minimapRef = useRef<HTMLCanvasElement>(null);
+  const selLabelRef = useRef<HTMLDivElement>(null);
+
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [progress, setProgress] = useState(0);
+  const [elements, setElements] = useState<ElementInfo[]>([]);
+  const [mode, setMode] = useState<ViewMode>('orbit');
+  const [selectedGid, setSelectedGid] = useState<string | null>(null);
+  const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [stats, setStats] = useState<EngineStats | null>(null);
+  const [labels, setLabels] = useState(false);
+  const [highlightDisc, setHighlightDisc] = useState<Discipline | null>(null);
+  const [highlightCount, setHighlightCount] = useState(0);
+  const [style, setStyle] = useState<Style>('mono');
+  const [shadows, setShadows] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [planActive, setPlanActive] = useState(false);
+  const [side, setSide] = useState<SidePanel>('none');
+  const [navOpen, setNavOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [walkHint, setWalkHint] = useState(false);
+  const [aiConfig, setAiConfig] = useState<{ configured: boolean; model: string | null }>({ configured: false, model: null });
+  const [aiDraft, setAiDraft] = useState<string | undefined>(undefined);
+
+  // Tur
+  const [tourStops, setTourStops] = useState<TourStop[]>([]);
+  const [tourIndex, setTourIndex] = useState<number>(-1); // -1 = tidak aktif
+  const [tourMoving, setTourMoving] = useState(false);
+  const [tourAi, setTourAi] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+
+  // Penjelasan AI per elemen (cache di memori halaman).
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
+  const [explaining, setExplaining] = useState(false);
+
+  const tourStrings = useMemo<TourStrings>(
+    () => ({
+      overviewTitle: s.tourOverview,
+      overviewDesc: s.tourOverviewDesc,
+      planTitle: s.tourPlan,
+      planDesc: s.tourPlanDesc,
+      walkTitle: s.tourWalk,
+      walkDesc: s.tourWalkDesc,
+      disciplineTitle: {
+        structure: s.discStructure,
+        architecture: s.discArchitecture,
+        mep: s.discMep,
+        site: s.discSite,
+        other: s.discOther,
+      },
+      disciplineDesc: (label, count, cats) => tpl(s.discDesc, { label, count, cats: cats.join(', ') }),
+    }),
+    [s]
+  );
+  const discLabel = useMemo<Record<Discipline, string>>(
+    () => ({ structure: s.sysStructure, architecture: s.sysArchitecture, mep: s.sysMep, site: s.sysSite, other: s.sysOther }),
+    [s]
+  );
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 3500);
+  }, []);
+
+  // ---------------------------------------------------------------- engine
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const engine = new ShowcaseEngine(el);
+    engineRef.current = engine;
+    engine.attachMinimap(minimapRef.current);
+
+    // Preferensi tampilan tersimpan di browser.
+    try {
+      const p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+      if (p.style === 'original' || p.style === 'mono') {
+        engine.setStyle(p.style);
+        setStyle(p.style);
+      }
+      if (typeof p.labels === 'boolean') {
+        engine.setLabels(p.labels);
+        setLabels(p.labels);
+      }
+    } catch {
+      /* abaikan */
+    }
+
+    const offs = [
+      engine.on('progress', setProgress),
+      engine.on('ready', () => {
+        setLoadState('ready');
+        setElements(engine.elements);
+        setShadows(engine.shadowsOn);
+      }),
+      engine.on('error', () => setLoadState('error')),
+      engine.on('select', (gid) => {
+        setSelectedGid(gid);
+        // Memilih elemen selalu membuka panel inspeksi (riwayat obrolan AI
+        // tetap tersimpan, tinggal dibuka lagi dari dock).
+        if (gid) setSide('inspect');
+        else setSide((cur) => (cur === 'inspect' ? 'none' : cur));
+      }),
+      engine.on('hover', setHover),
+      engine.on('stats', setStats),
+      engine.on('mode', (m) => {
+        setMode(m);
+        setPlanActive(false);
+        setAutoRotate(false);
+        if (m === 'walk') {
+          setWalkHint(true);
+          window.setTimeout(() => setWalkHint(false), 6000);
+        }
+      }),
+      engine.on('tweenEnd', () => setTourMoving(false)),
+      engine.on('userInput', () => setAutoRotate(false)),
+    ];
+    engine.load(glbUrl);
+
+    let active = true;
+    fetchElementNames(projectId, () => active).then((names) => {
+      if (!names || !active) return;
+      engine.applyNames(names);
+      if (engine.elements.length) setElements(engine.elements);
+    });
+
+    // Auto-update saat model baru di-push dari Revit (Supabase Realtime).
+    const channel = subscribeToProjectUpdates(projectId, (version) => {
+      showToast(locales[locale].viewer.liveUpdate);
+      setLoadState('loading');
+      engine.load(`/api/model/${version.id}`);
+    });
+
+    fetch('/api/ai')
+      .then((r) => r.json())
+      .then((j) => setAiConfig({ configured: Boolean(j.configured), model: j.model ?? null }))
+      .catch(() => setAiConfig({ configured: false, model: null }));
+
+    // Ukuran container bisa berubah tanpa event resize window (sidebar sheet).
+    const ro = new ResizeObserver(() => engine.resize());
+    ro.observe(el);
+
+    return () => {
+      active = false;
+      offs.forEach((off) => off());
+      ro.disconnect();
+      unsubscribe(channel);
+      engine.dispose();
+      engineRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [glbUrl, projectId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ style, labels }));
+    } catch {
+      /* abaikan */
+    }
+  }, [style, labels]);
+
+  // Tur otomatis disusun ulang tiap daftar elemen berubah (nama dari DB datang).
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || elements.length === 0) return;
+    const stops = buildAutoTour(elements, engine.bounds, tourStrings);
+    setTourStops(stops);
+    setTourAi('idle');
+    engine.setMinimapMarkers(
+      stops.map((st, i) => ({ x: st.pose.target[0], z: st.pose.target[2], label: String(i + 1) }))
+    );
+  }, [elements, tourStrings]);
+
+  // Label elemen terpilih mengikuti objek tiap frame (DOM langsung, tanpa
+  // setState) — lihat catatan teknis #7 di CATATAN.md.
+  useEffect(() => {
+    const div = selLabelRef.current;
+    if (!div) return;
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const engine = engineRef.current;
+      if (!engine || !selectedGid) {
+        div.style.display = 'none';
+        return;
+      }
+      const p = engine.projectElement(selectedGid);
+      if (!p || !p.visible) {
+        div.style.display = 'none';
+        return;
+      }
+      div.style.display = 'block';
+      div.style.transform = `translate(-50%, -100%) translate(${p.x.toFixed(0)}px, ${(p.y - 8).toFixed(0)}px)`;
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [selectedGid]);
+
+  // ---------------------------------------------------------------- derived
+  const selected = useMemo(() => (selectedGid ? engineRef.current?.getElement(selectedGid) ?? null : null), [selectedGid, elements]);
+  const sameName = useMemo(() => (selected ? elements.filter((e) => e.name === selected.name) : []), [selected, elements]);
+  const nearby = useMemo(() => {
+    if (!selected) return [];
+    const c = selected.center;
+    return elements
+      .filter((e) => e.gid !== selected.gid && !e.gid.startsWith('unmapped:'))
+      .map((e) => ({ e, d: Math.hypot(e.center[0] - c[0], e.center[1] - c[1], e.center[2] - c[2]) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 5)
+      .map((x) => x.e);
+  }, [selected, elements]);
+
+  const disciplines = useMemo(() => {
+    const counts = new Map<Discipline, number>();
+    for (const e of elements) counts.set(e.discipline, (counts.get(e.discipline) ?? 0) + 1);
+    return DISCIPLINE_ORDER.filter((d) => (counts.get(d) ?? 0) > 0).map((d) => ({ key: d, label: discLabel[d], count: counts.get(d) ?? 0 }));
+  }, [elements, discLabel]);
+
+  const viewpoints = useMemo<Viewpoint[]>(() => {
+    const engine = engineRef.current;
+    const list: Viewpoint[] = tourStops.map((st, i) => ({ id: `stop:${i}`, label: st.title, sub: String(i + 1).padStart(2, '0') }));
+    if (engine) {
+      const h = engine.bounds.max[1] - engine.bounds.min[1];
+      const levels = [EYE_LEVEL, 4, 8, 14].filter((v) => v < h + 1);
+      levels.forEach((lv) => list.push({ id: `eye:${lv}`, label: tpl(s.levelPreset, { h: lv.toFixed(1) }), sub: 'walk' }));
+      list.push({ id: `eye:${(h + EYE_LEVEL).toFixed(2)}`, label: s.roofLevel, sub: 'walk' });
+    }
+    return list;
+  }, [tourStops, s, elements]);
+
+  // Area terdekat (chip kanan atas): pemberhentian tur yang targetnya paling
+  // dekat ke posisi kamera.
+  const areaLabel = useMemo(() => {
+    if (!stats || tourStops.length === 0) return null;
+    let best: TourStop | null = null;
+    let bd = Infinity;
+    for (const st of tourStops) {
+      if (st.id === 'overview' || st.id === 'plan') continue;
+      const t = st.pose.target;
+      const d = Math.hypot(t[0] - stats.position[0], t[2] - stats.position[2]);
+      if (d < bd) {
+        bd = d;
+        best = st;
+      }
+    }
+    return best?.title ?? null;
+  }, [stats, tourStops]);
+
+  // ---------------------------------------------------------------- actions
+  const selectAndGo = useCallback((gid: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.select(gid);
+    engine.focusElement(gid);
+  }, []);
+
+  const applyDiscHighlight = useCallback(
+    (d: Discipline | null) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      setHighlightDisc(d);
+      if (!d) {
+        engine.clearHighlight();
+        setHighlightCount(0);
+        return;
+      }
+      const gids = elements.filter((e) => e.discipline === d).map((e) => e.gid);
+      engine.setHighlight(gids);
+      setHighlightCount(gids.length);
+    },
+    [elements]
+  );
+
+  const clearHighlight = useCallback(() => {
+    engineRef.current?.clearHighlight();
+    engineRef.current?.select(null);
+    setHighlightDisc(null);
+    setHighlightCount(0);
+  }, []);
+
+  const goToStop = useCallback(
+    (i: number) => {
+      const engine = engineRef.current;
+      const stop = tourStops[i];
+      if (!engine || !stop) return;
+      setTourIndex(i);
+      setTourMoving(true);
+      setSide('none');
+      engine.select(null);
+      if (stop.highlightCategories?.length) {
+        const cats = new Set(stop.highlightCategories);
+        const gids = elements.filter((e) => cats.has(e.category)).map((e) => e.gid);
+        engine.setHighlight(gids);
+        setHighlightCount(gids.length);
+        setHighlightDisc(null);
+      } else if (stop.highlightGids?.length) {
+        engine.setHighlight(stop.highlightGids);
+        setHighlightCount(stop.highlightGids.length);
+      } else {
+        engine.clearHighlight();
+        setHighlightCount(0);
+      }
+      if (stop.id === 'plan') {
+        engine.plan(1.6);
+        setPlanActive(true);
+      } else {
+        engine.goTo(stop.pose, stop.mode, 1.6);
+        setPlanActive(false);
+      }
+      if (stop.autoRotate) {
+        window.setTimeout(() => {
+          const e = engineRef.current;
+          if (e && e.mode === 'orbit') {
+            e.setAutoRotate(true);
+            setAutoRotate(true);
+          }
+        }, 1700);
+      }
+    },
+    [tourStops, elements]
+  );
+
+  const startTour = useCallback(() => {
+    if (tourStops.length === 0) return;
+    setNavOpen(false);
+    goToStop(0);
+  }, [tourStops, goToStop]);
+
+  const exitTour = useCallback(() => {
+    setTourIndex(-1);
+    engineRef.current?.clearHighlight();
+    engineRef.current?.setAutoRotate(false);
+    setHighlightCount(0);
+    setAutoRotate(false);
+  }, []);
+
+  const resetView = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    exitTour();
+    engine.select(null);
+    engine.overview();
+    setPlanActive(false);
+  }, [exitTour]);
+
+  const onViewpoint = useCallback(
+    (id: string) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      if (id.startsWith('stop:')) {
+        const st = tourStops[Number(id.slice(5))];
+        if (!st) return;
+        if (st.id === 'plan') {
+          engine.plan();
+          setPlanActive(true);
+        } else engine.goTo(st.pose, st.mode);
+        return;
+      }
+      if (id.startsWith('eye:')) {
+        const h = Number(id.slice(4));
+        if (engine.mode !== 'walk') engine.setMode('walk');
+        window.setTimeout(() => engine.setEyeLevel(h), engine.mode === 'walk' ? 0 : 1050);
+      }
+    },
+    [tourStops]
+  );
+
+  const snapshot = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const a = document.createElement('a');
+    a.href = engine.snapshot();
+    a.download = `${projectName.replace(/[^\w-]+/g, '_')}-3d.png`;
+    a.click();
+  }, [projectName]);
+
+  // ---------------------------------------------------------------- AI
+  const getContext = useCallback((): AiContext => {
+    const engine = engineRef.current;
+    const byCat = new Map<string, CategorySummary & { names: Set<string> }>();
+    for (const e of elements) {
+      let c = byCat.get(e.category);
+      if (!c) {
+        c = { category: e.category, label: e.categoryLabel, discipline: e.discipline, count: 0, samples: [], names: new Set() };
+        byCat.set(e.category, c);
+      }
+      c.count++;
+      if (c.names.size < 4 && !e.gid.startsWith('unmapped:')) c.names.add(e.name);
+    }
+    const categories = Array.from(byCat.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 45)
+      .map(({ names, ...rest }) => ({ ...rest, samples: Array.from(names) }));
+    const disc: Record<string, number> = {};
+    for (const e of elements) disc[e.discipline] = (disc[e.discipline] ?? 0) + 1;
+    const size = engine ? engine.bounds.max.map((v, i) => v - engine.bounds.min[i]) : [0, 0, 0];
+    return {
+      projectName,
+      locale,
+      elementCount: elements.length,
+      modelSize: [size[0], size[1], size[2]],
+      categories,
+      disciplines: disc,
+      selected: selected ? { ...selected, neighbors: nearby.map((n) => `${n.name} (${n.categoryLabel})`) } : null,
+      mode,
+      tourTitles: tourStops.map((t) => t.title),
+    };
+  }, [elements, projectName, locale, selected, nearby, mode, tourStops]);
+
+  const runActions = useCallback(
+    (actions: AiAction[]) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      for (const a of actions) {
+        switch (a.type) {
+          case 'focus': {
+            const r = resolveQuery(elements, a.query);
+            if (r.gids.length === 0) break;
+            engine.setHighlight(r.gids);
+            setHighlightCount(r.gids.length);
+            setHighlightDisc(null);
+            if (r.gids.length === 1 && r.primary) engine.select(r.primary.gid);
+            engine.focusGids(r.gids);
+            break;
+          }
+          case 'highlight': {
+            const r = resolveQuery(elements, a.query);
+            engine.setHighlight(r.gids);
+            setHighlightCount(r.gids.length);
+            setHighlightDisc(null);
+            break;
+          }
+          case 'mode':
+            if (a.mode === 'plan') {
+              engine.plan();
+              setPlanActive(true);
+            } else if (a.mode === 'walk') engine.entrance();
+            else engine.setMode('orbit');
+            break;
+          case 'labels':
+            engine.setLabels(a.on);
+            setLabels(a.on);
+            break;
+          case 'tour':
+            if (typeof a.stop === 'number' && tourStops[a.stop - 1]) goToStop(a.stop - 1);
+            else startTour();
+            break;
+          case 'reset':
+            resetView();
+            break;
+          case 'clear':
+            clearHighlight();
+            break;
+        }
+      }
+    },
+    [elements, tourStops, goToStop, startTour, resetView, clearHighlight]
+  );
+
+  const chat = useAiChat({ projectId, token: accessToken, getContext, onActions: runActions });
+
+  const explainSelected = useCallback(async () => {
+    if (!selected || explaining) return;
+    const gid = selected.gid;
+    setExplaining(true);
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, token: accessToken, mode: 'explain', context: getContext() }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `${res.status}`);
+      }
+      const reader = res.body?.getReader();
+      const dec = new TextDecoder();
+      let full = '';
+      if (reader) {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          full += dec.decode(value, { stream: true });
+          setExplanations((m) => ({ ...m, [gid]: full }));
+        }
+      } else full = await res.text();
+      setExplanations((m) => ({ ...m, [gid]: full.trim() }));
+    } catch (err) {
+      showToast(tpl(s.aiError, { msg: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setExplaining(false);
+    }
+  }, [selected, explaining, projectId, accessToken, getContext, showToast, s]);
+
+  const narrateTour = useCallback(async () => {
+    if (tourAi === 'busy' || tourStops.length === 0) return;
+    setTourAi('busy');
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          token: accessToken,
+          mode: 'tour',
+          context: getContext(),
+          tour: tourStops.map((t) => ({ id: t.id, title: t.title, description: t.description })),
+        }),
+      });
+      const j = (await res.json()) as { stops?: { id: string; title?: string; description?: string }[]; error?: string };
+      if (!res.ok || !j.stops) throw new Error(j.error ?? `${res.status}`);
+      const byId = new Map(j.stops.map((x) => [x.id, x]));
+      setTourStops((cur) =>
+        cur.map((st) => {
+          const n = byId.get(st.id);
+          return n ? { ...st, title: n.title?.trim() || st.title, description: n.description?.trim() || st.description } : st;
+        })
+      );
+      setTourAi('done');
+    } catch (err) {
+      setTourAi('error');
+      showToast(tpl(s.aiError, { msg: err instanceof Error ? err.message : String(err) }));
+    }
+  }, [tourAi, tourStops, projectId, accessToken, getContext, showToast, s]);
+
+  // ---------------------------------------------------------------- keyboard
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const engine = engineRef.current;
+      if (!engine) return;
+      const k = e.key.toLowerCase();
+      if (k === 'escape') {
+        if (navOpen) setNavOpen(false);
+        else if (side !== 'none') setSide('none');
+        else if (tourIndex >= 0) exitTour();
+        else engine.select(null);
+      } else if (k === 'e' && !e.repeat) {
+        const gid = engine.hovered ?? engine.selected;
+        if (gid) {
+          engine.select(gid);
+          setSide('inspect');
+        }
+      } else if (k === 'f') {
+        if (engine.selected) engine.focusElement(engine.selected);
+      } else if (k === 't') {
+        tourIndex >= 0 ? exitTour() : startTour();
+      } else if (k === 'l') {
+        const on = !engine.labelsOn;
+        engine.setLabels(on);
+        setLabels(on);
+      } else if (k === 'r') {
+        resetView();
+      } else if (k === '/' ) {
+        e.preventDefault();
+        setNavOpen(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen, side, tourIndex, exitTour, startTour, resetView]);
+
+  // ---------------------------------------------------------------- render
+  const hoveredEl = hover ? engineRef.current?.getElement(hover.gid) ?? null : null;
+  const aiOn = aiConfig.configured;
+
+  return (
+    <div className="sc-root">
+      <div ref={canvasRef} className="sc-canvas" />
+      <div ref={selLabelRef} className="sc-label-sel" style={{ display: 'none' }}>
+        {selected?.name}
+      </div>
+
+      {/* Brand kiri atas */}
+      <div className="sc-brand">
+        <div className="sc-brand-mark">{Icons.compass}</div>
+        <div>
+          <div className="text-[13px] font-semibold tracking-wide text-[#10201a]">{projectName}</div>
+          <div className="sc-eyebrow !text-[#10201a]/60">{s.tagline}</div>
+        </div>
+      </div>
+
+      {/* Mode jalan / orbit */}
+      <Panel className="sc-topcenter">
+        <button type="button" className={`sc-pill ${mode === 'walk' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('walk')}>
+          {Icons.walk}
+          {s.modeWalk}
+        </button>
+        <button type="button" className={`sc-pill ${mode === 'orbit' ? 'is-on' : ''}`} onClick={() => engineRef.current?.setMode('orbit')}>
+          {Icons.orbit}
+          {s.modeOrbit}
+        </button>
+      </Panel>
+
+      {/* Kanan atas: live + bantuan */}
+      <div className="sc-topright">
+        <Panel className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-white/80">
+          <span className="sc-dot" style={{ boxShadow: '0 0 8px var(--sc-accent)' }} />
+          {s.live}
+        </Panel>
+        <button type="button" className="sc-brand-mark !text-white/70 hover:!text-white" onClick={() => setSide(side === 'help' ? 'none' : 'help')} title="?">
+          {Icons.help}
+        </button>
+      </div>
+      {areaLabel && (
+        <Panel className="sc-area">
+          <span className="text-[color:var(--sc-accent)]">{Icons.pin}</span>
+          {areaLabel}
+          {stats && mode === 'walk' && (
+            <span className="sc-mono text-white/45">· {s.eyeLevel} {stats.eyeHeight.toFixed(1)} m</span>
+          )}
+        </Panel>
+      )}
+
+      {/* Panel kiri */}
+      {loadState === 'ready' && (
+        <ExplorePanel
+          strings={s}
+          elementCount={elements.length}
+          labels={labels}
+          onLabels={(v) => {
+            engineRef.current?.setLabels(v);
+            setLabels(v);
+          }}
+          disciplines={disciplines}
+          highlightDisc={highlightDisc}
+          onHighlightDisc={applyDiscHighlight}
+          highlightCount={highlightCount}
+          planActive={planActive}
+          onPlan={() => {
+            const engine = engineRef.current;
+            if (!engine) return;
+            if (planActive) {
+              engine.overview();
+              setPlanActive(false);
+            } else {
+              engine.plan();
+              setPlanActive(true);
+            }
+          }}
+          viewpoints={viewpoints}
+          onViewpoint={onViewpoint}
+          style={style}
+          onStyle={(st) => {
+            engineRef.current?.setStyle(st);
+            setStyle(st);
+          }}
+          shadows={shadows}
+          onShadows={(v) => {
+            engineRef.current?.setShadows(v);
+            setShadows(v);
+          }}
+          autoRotate={autoRotate}
+          onAutoRotate={(v) => {
+            const engine = engineRef.current;
+            if (!engine) return;
+            if (engine.mode !== 'orbit') engine.setMode('orbit');
+            window.setTimeout(() => engine.setAutoRotate(v), engine.mode === 'orbit' ? 0 : 1050);
+            setAutoRotate(v);
+          }}
+          onFind={() => setNavOpen(true)}
+          onReset={resetView}
+          onEntrance={() => {
+            exitTour();
+            engineRef.current?.entrance();
+          }}
+          onClearHighlight={clearHighlight}
+          onSnapshot={snapshot}
+        />
+      )}
+
+      {/* Hover (orbit) / sedang melihat (walk) */}
+      {mode === 'walk' && loadState === 'ready' && (
+        <>
+          <div className="sc-crosshair">
+            <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M7 1v4M7 9v4M1 7h4M9 7h4" />
+            </svg>
+          </div>
+          {hoveredEl && hoveredEl.gid !== selectedGid && tourIndex < 0 && (
+            <Panel className="sc-lookat px-2.5 py-1 text-[11px]">
+              <span className="text-white/45">{s.lookingAt}: </span>
+              <span className="text-white">{hoveredEl.name}</span>
+              <span className="sc-mono ml-2 text-white/40">{s.pressE}</span>
+            </Panel>
+          )}
+          {walkHint && (
+            <Panel className="sc-hint">
+              <span className="text-[color:var(--sc-accent)]">{Icons.eye}</span>
+              <span>{s.lookHint}</span>
+              <span className="text-white/45">{s.lookHintSub}</span>
+            </Panel>
+          )}
+        </>
+      )}
+      {mode === 'orbit' && hoveredEl && hover && hoveredEl.gid !== selectedGid && (
+        <Panel className="sc-hover" style={{ left: hover.x, top: hover.y }}>
+          {hoveredEl.name} <span className="text-white/45">· {hoveredEl.categoryLabel}</span>
+        </Panel>
+      )}
+
+      {/* Bawah tengah: tur atau dock */}
+      {loadState === 'ready' && tourIndex >= 0 ? (
+        <TourCard
+          stops={tourStops}
+          index={tourIndex}
+          moving={tourMoving}
+          strings={s}
+          aiState={tourAi}
+          aiEnabled={aiOn}
+          onPrev={() => goToStop(Math.max(0, tourIndex - 1))}
+          onNext={() => goToStop(Math.min(tourStops.length - 1, tourIndex + 1))}
+          onExit={exitTour}
+          onAiNarrate={narrateTour}
+        />
+      ) : (
+        loadState === 'ready' && (
+          <Panel className="sc-dock">
+            <button type="button" className="sc-pill" onClick={startTour}>
+              {Icons.route}
+              {s.tour}
+            </button>
+            <button type="button" className="sc-pill" onClick={() => setNavOpen(true)}>
+              {Icons.search}
+              {s.navigator}
+            </button>
+            <button type="button" className={`sc-pill ${side === 'ai' ? 'is-on' : ''}`} onClick={() => setSide(side === 'ai' ? 'none' : 'ai')}>
+              {Icons.spark}
+              {s.assistant}
+            </button>
+            {sheetCount > 0 && onOpenSheets && (
+              <button type="button" className="sc-pill" onClick={onOpenSheets}>
+                {Icons.sheet}
+                {s.drawings} <span className="sc-badge">{sheetCount}</span>
+              </button>
+            )}
+          </Panel>
+        )
+      )}
+
+      {/* Minimap kanan bawah */}
+      <Panel className="sc-minimap">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] text-white/70">
+          <span className="text-[color:var(--sc-accent)]">{Icons.compass}</span>
+          {s.minimap}
+        </div>
+        <canvas
+          ref={minimapRef}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            engineRef.current?.minimapClick(e.clientX - r.left, e.clientY - r.top);
+          }}
+        />
+        <div className="sc-mono mt-1.5 flex items-center justify-between text-white/45">
+          <span>{mode === 'walk' ? s.eyeLevel : s.groundLevel}</span>
+          <span className="text-white/75">{stats ? `${stats.eyeHeight.toFixed(1)} m` : '—'}</span>
+        </div>
+      </Panel>
+
+      {/* Status kiri bawah */}
+      <div className="sc-status">
+        <span>{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
+      </div>
+      <div className="sc-status sc-status-r">
+        {stats && <span>{stats.fps} FPS</span>}
+        <span>{s.approx}</span>
+      </div>
+
+      {/* Panel kanan */}
+      {side === 'inspect' && selected && (
+        <InspectionPanel
+          element={selected}
+          groundY={engineRef.current?.groundY ?? 0}
+          sameName={sameName}
+          nearby={nearby}
+          strings={s}
+          aiEnabled={aiOn}
+          explanation={explanations[selected.gid] ?? null}
+          explaining={explaining}
+          disciplineLabel={discLabel[selected.discipline]}
+          onExplain={explainSelected}
+          onGoto={() => engineRef.current?.focusElement(selected.gid)}
+          onHighlightSimilar={() => {
+            const gids = sameName.map((e) => e.gid);
+            engineRef.current?.setHighlight(gids);
+            setHighlightCount(gids.length);
+            setHighlightDisc(null);
+          }}
+          onAsk={() => {
+            setAiDraft(locale === 'en' ? `Tell me about "${selected.name}"` : `Ceritakan tentang "${selected.name}"`);
+            setSide('ai');
+          }}
+          onSelect={selectAndGo}
+          onClose={() => setSide('none')}
+        />
+      )}
+      {side === 'ai' && (
+        <AiPanel
+          strings={s}
+          enabled={aiOn}
+          model={aiConfig.model}
+          messages={chat.messages}
+          busy={chat.busy}
+          onSend={(t) => {
+            setAiDraft(undefined);
+            chat.send(t);
+          }}
+          onClear={chat.clear}
+          onClose={() => setSide(selected ? 'inspect' : 'none')}
+          draft={aiDraft}
+        />
+      )}
+      {side === 'help' && (
+        <Panel className="sc-help">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="sc-eyebrow">{locales[locale].viewer.shortcuts}</span>
+            <button type="button" className="sc-close" onClick={() => setSide('none')}>×</button>
+          </div>
+          <div>
+            <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> — {locale === 'en' ? 'walk / move' : 'jalan / geser'}
+            <br />
+            <kbd>Q</kbd> / <kbd>E</kbd> — {locale === 'en' ? 'down / up (walk)' : 'turun / naik (mode jalan)'}
+            <br />
+            <kbd>Shift</kbd> — {locale === 'en' ? 'run' : 'lari'} · <kbd>E</kbd> — {locale === 'en' ? 'inspect' : 'inspeksi'}
+            <br />
+            <kbd>F</kbd> — {locale === 'en' ? 'focus selected' : 'fokus elemen terpilih'} · <kbd>T</kbd> — {s.tour}
+            <br />
+            <kbd>L</kbd> — {s.labels} · <kbd>R</kbd> — {s.resetView} · <kbd>/</kbd> — {s.find}
+            <br />
+            <kbd>Esc</kbd> — {locale === 'en' ? 'close / deselect' : 'tutup / batal pilih'}
+          </div>
+        </Panel>
+      )}
+
+      {navOpen && (
+        <EquipmentNavigator
+          elements={elements}
+          strings={s}
+          onPick={(gid) => {
+            setNavOpen(false);
+            selectAndGo(gid);
+          }}
+          onClose={() => setNavOpen(false)}
+        />
+      )}
+
+      {toast && <Panel className="sc-toast">{toast}</Panel>}
+
+      {loadState !== 'ready' && (
+        <div className="sc-loading">
+          <Panel className="sc-loading-box">
+            <div className="flex items-center gap-2 text-[13px] text-white">
+              <span className="text-[color:var(--sc-accent)]">{Icons.compass}</span>
+              {projectName}
+            </div>
+            <p className="mt-1 text-[11.5px] text-white/60">{loadState === 'error' ? s.loadError : s.loading}</p>
+            {loadState === 'loading' && (
+              <div className="sc-bar mt-3">
+                <span style={{ width: `${progress}%` }} />
+              </div>
+            )}
+          </Panel>
+        </div>
+      )}
+    </div>
+  );
+}

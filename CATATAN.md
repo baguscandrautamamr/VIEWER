@@ -17,9 +17,13 @@ Website presentasi model Revit ke client:
 - Sheet PDF yang bisa diklik untuk memindahkan sudut kamera 3D
 - Auto-update saat model baru di-push dari Revit (Supabase Realtime)
 - Download file `.rvt` (disimpan di Google Drive)
+- **Mode presentasi** (gaya virtual plant tour): jalan kaki/orbit, tur terpandu
+  otomatis, navigator & inspeksi elemen, label, minimap, **Asisten AI** yang bisa
+  menggerakkan viewer
 
 **Stack:** Next.js 15 · React 19 · Three.js 0.170 · Tailwind · Supabase
-(database + Realtime) · Google Drive API (penyimpanan file besar) · Vercel
+(database + Realtime) · Google Drive API (penyimpanan file besar) ·
+`@anthropic-ai/sdk` (Asisten AI, Messages API — bisa lewat proxy) · Vercel
 
 ---
 
@@ -28,6 +32,14 @@ Website presentasi model Revit ke client:
 | Mau ubah apa | Buka file |
 |---|---|
 | Semua isi viewer 3D (kontrol, tool, kamera) | `components/ModelViewer.tsx` |
+| **Mode presentasi** — tampilan & panel (React) | `components/showcase/ShowcaseViewer.tsx` (+ `ExplorePanel`, `TourCard`, `EquipmentNavigator`, `InspectionPanel`, `AiPanel`, `ui.tsx`) |
+| Mesin 3D mode presentasi (Three.js murni: material, kamera, jalan kaki, label, minimap) | `lib/showcase/engine.ts` |
+| Tur otomatis (pose kamera per pemberhentian) | `lib/showcase/tour.ts` |
+| Pengelompokan disiplin (Struktur/Arsitektur/MEP) dari nama family | `lib/showcase/disciplines.ts` |
+| Pencarian elemen & penerjemah query AI → elemen | `lib/showcase/search.ts` |
+| Endpoint AI + prompt + protokol aksi | `app/api/ai/route.ts`, `lib/showcase/aiPrompt.ts`, `lib/showcase/aiActions.ts` |
+| Saklar Mode presentasi / Mode teknis | `components/PresentClient.tsx` |
+| Tema CSS mode presentasi (kelas `sc-*`) | `app/globals.css` (bagian bawah) |
 | Panel struktur model (pohon kategori→elemen) | `components/SelectionTree.tsx` |
 | Layer coret-coret / markup | `components/MarkupOverlay.tsx` |
 | Layout halaman presentasi + sidebar sheet | `components/PresentClient.tsx` |
@@ -91,6 +103,29 @@ Website presentasi model Revit ke client:
 ## Riwayat Perubahan
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
+
+### 5 September 2026
+- **Mode presentasi + Asisten AI.** Viewer baru `components/showcase/*` yang
+  meniru gaya video referensi "virtual plant tour": model monokrom + sorotan
+  hijau limau, lantai grid + bayangan, panel gelap kaca; **mode jalan** (eye
+  level 1,7 m, WASD, seret untuk menoleh, crosshair + "sedang melihat" + tombol
+  E) dan **mode orbit**; **tur terpandu otomatis** (ikhtisar → per disiplin →
+  jalan kaki → tampak atas) dengan animasi kamera; **navigator elemen**
+  (pencarian toleran, dikelompokkan per kategori); **inspeksi elemen** (dimensi
+  & elevasi dari kotak batas, elemen sejenis/sekitar); **label elemen** (maks 14,
+  tersebar per kategori, anti-tumpang tindih kasar); **minimap** (jejak elemen,
+  kamera + kerucut pandang, penanda tur, klik = teleport); sorot sistem per
+  disiplin; gaya monokrom/warna asli; simpan PNG. Viewer lama tetap ada sebagai
+  **Mode teknis** (saklar di tengah-atas, diingat di localStorage).
+  **AI:** `POST /api/ai` (SDK `@anthropic-ai/sdk`, env `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL` untuk proxy, `AI_MODEL`) dengan tiga mode: `chat`
+  (streaming; AI bisa menggerakkan viewer lewat baris `[[action:{...}]]`),
+  `explain` (fungsi elemen terpilih), `tour` (narasi pemberhentian, JSON).
+  Dijaga token akses client + pembatas laju per IP. Tanpa kunci, tombol AI
+  disembunyikan.
+  Diuji end-to-end dengan GLB sintetis + mock Supabase/Messages API lewat
+  Playwright (proxy vikey tidak bisa dijangkau dari sandbox pengerjaan — alur
+  ke API asli belum diverifikasi, cek log Vercel saat pertama dipakai)
 
 ### 28 Juli 2026
 - **Fix: klik kolom malah kena "hantu" tanpa kategori.** Sinar pemilihan tidak
@@ -492,3 +527,46 @@ node scripts/ifc-to-web.mjs <file.ifc>
 ```
 
 Detail lengkap ada di `README.md`.
+
+28. **Mode presentasi: yang berjalan tiap frame JANGAN lewat React.** Label
+    elemen, minimap, label elemen terpilih, dan tween kamera dikerjakan
+    langsung ke DOM/canvas di `lib/showcase/engine.ts` (pola: kumpulan `div`
+    yang dipakai ulang, `transform` diubah tiap frame). React hanya menerima
+    event (`select`, `hover`, `stats` 2×/detik). Versi awal yang memakai
+    `setState` per frame membuat halaman tersendat di model besar.
+
+29. **Tween kamera pakai waktu NYATA, bukan `dt` yang di-clamp.** `dt` untuk
+    gerak keyboard di-clamp 0,1 s supaya lompatan saat tab tidak aktif tidak
+    membuat kamera terbang jauh. Tapi kalau tween ikut memakai `dt` itu, di
+    mesin lambat (5 FPS) animasi 1,5 s molor jadi 3 s lebih dan tombol
+    "Berikutnya" terasa tidak merespons. Tween memakai `dtRaw` (batas 0,5 s).
+
+30. **GUID duplikat di GLB = elemen digabung.** Indeks elemen di engine di-key
+    GlobalId; mesh yang GUID-nya sama dianggap satu elemen (memang begitu untuk
+    elemen multi-material). Kalau viewer melaporkan jumlah elemen jauh lebih
+    sedikit dari yang diharapkan, cek dulu GUID-nya unik — ini pernah menipu
+    saat menguji dengan GLB sintetis yang generator GUID-nya rusak.
+
+31. **`toneMapping` renderer mempengaruhi warna material asli.** ACES cocok
+    untuk tampilan monokrom, tapi menggelapkan warna material Revit. Saat ganti
+    gaya, tone mapping diganti (`NoToneMapping` untuk warna asli) dan SEMUA
+    material ditandai `needsUpdate = true` — tanpa itu shader lama masih dipakai
+    dan perubahan tidak terlihat.
+
+32. **Aksi AI = format teks `[[action:{...}]]`, bukan tool-use API.** Pilihan
+    sadar: proxy seperti vikey meneruskan ke model non-Claude yang belum tentu
+    mendukung tool-use ala Messages API, dan format teks tetap bisa di-stream.
+    Parser (`lib/showcase/aiActions.ts`) membuang potongan aksi yang belum utuh
+    saat streaming supaya tidak sempat tampil mentah. Query aksi diterjemahkan
+    ke elemen lewat `resolveQuery()` — kategori diutamakan bila skornya
+    sebanding, supaya "tunjukkan kolom" menyorot semua kolom, bukan satu.
+
+33. **Endpoint AI wajib dijaga.** `/api/ai` mengecek `projectId` + token client
+    ke `projects.client_access_token` dan membatasi laju per IP. Tanpa itu,
+    siapa pun yang tahu URL bisa memakai kuota API lewat endpoint terbuka.
+    Jangan pernah mengirim `ANTHROPIC_API_KEY` ke browser.
+
+34. **Elemen di panel kanan & modal navigator sama-sama memakai kelas
+    `.sc-result`.** Kalau menulis uji otomatis, pakai selektor
+    `.sc-modal .sc-result` — klik ke `.sc-result` pertama bisa mengenai daftar
+    "Di sekitarnya" di panel inspeksi yang tertutup backdrop modal.

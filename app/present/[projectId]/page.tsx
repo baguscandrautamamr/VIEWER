@@ -111,6 +111,8 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
 
       <PresentClient
         projectId={projectId}
+        projectName={project.name as string}
+        accessToken={token}
         files={files}
         fallbackUrl={fallbackUrl}
         locale={locale}

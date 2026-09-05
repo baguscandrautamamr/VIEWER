@@ -95,12 +95,23 @@ sebagai **warna per-vertex** (Uint8, 4 byte), klik/hover memakai **BVH**
 (`three-mesh-bvh`) dengan identitas per-vertex, dan bayangan dirender sekali
 (shadow map statis).
 
+Geometri gabungan dipecah lagi per **petak denah**, jadi petak yang di luar
+layar dilewati GPU (frustum culling) — terasa saat berjalan di dalam bangunan
+besar. Memilih objek **tidak memakai indeks BVH** (membangunnya membekukan
+halaman pada model besar): sinar diuji ke kotak batas tiap elemen lalu ke
+segitiga beberapa kandidat terdekat — 6–13 ms per klik pada 60 ribu elemen.
+
 Penggabungan dikerjakan **sekali** dan **dicicil per potongan** (dijadwalkan
 sendiri, bukan menumpang render loop), jadi halaman tidak pernah membeku dan
 progresnya kelihatan. Selama itu tombol **Mode teknis** tetap bisa diklik
 sebagai jalan keluar. Uji 60 ribu elemen: siap ~9 detik (sebelum diperbaiki: 64
-detik), dan biaya per frame ~5× lebih ringan daripada mode teknis pada model
-yang sama.
+detik), jeda JavaScript terpanjang setelah siap ~0,2 detik, dan biaya per frame
+~5× lebih ringan daripada mode teknis pada model yang sama.
+
+Untuk model sangat berat, viewer menurunkan kualitas sendiri: di atas 6 juta
+segitiga **bayangan dimatikan otomatis** (dengan pemberitahuan, bisa dinyalakan
+lagi di panel kiri). Jumlah elemen, jumlah segitiga, dan FPS bisa dilihat di
+panel **?** kanan atas — kirimkan angka itu kalau tampilan masih terasa berat.
 
 Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
 tidak terasa. Mode teknis tetap merender per elemen seperti semula.

@@ -105,6 +105,39 @@ Website presentasi model Revit ke client:
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
+### 5 September 2026 (larut)
+- **Fix: halaman membeku ("Halaman Tidak Merespons") SETELAH model selesai
+  dimuat.** Laporan user: 17.448 elemen sudah terbaca, dock sudah muncul,
+  lalu 0 FPS dan Chrome menawarkan keluar dari halaman. Biangnya
+  `new MeshBVH(...)` — dipanggil sekali secara SINKRON tepat setelah model
+  siap; pada geometri puluhan juta segitiga itu memblokir main thread
+  bermenit-menit. **three-mesh-bvh dibuang seluruhnya.**
+- **Memilih objek tanpa BVH.** Sinar diuji ke KOTAK BATAS tiap elemen (data
+  yang memang sudah dihitung saat menggabung, disimpan sebagai satu
+  `Float32Array` datar, slab test tanpa alokasi), kandidat diurutkan
+  berdasarkan jarak, lalu segitiga hanya diuji pada segelintir kandidat
+  terdekat dan berhenti begitu ada tembakan yang lebih dekat dari kotak
+  berikutnya. Diukur: **6–13 ms per klik** pada 17k–60k elemen, hasilnya
+  persis (klik di langit kosong tetap "tidak ada"), dan **nol** biaya
+  pembangunan indeks
+- **Petak (tile) + frustum culling.** Geometri gabungan dipecah per petak
+  denah (grid maksimum 6×6, ~1.500 potongan per petak) × padat/tembus. Petak
+  di luar layar dilewati GPU — penting saat berjalan di dalam bangunan besar.
+  Draw call tetap belasan, bukan puluhan ribu
+- **Penyesuaian kualitas otomatis.** Di atas 6 juta segitiga bayangan
+  dimatikan sendiri (lintasan bayangan menggandakan kerja vertex) dan user
+  diberi tahu lewat toast; di atas 1,5 juta segitiga peta bayangan diturunkan
+  ke 1024². Ada juga jaring pengaman: kalau FPS < 6 selama ~3 detik,
+  bayangan dimatikan sekali. Semua bisa dinyalakan lagi dari panel kiri
+- **Jumlah segitiga ditampilkan** di panel bantuan (?) bersama jumlah elemen
+  dan FPS — untuk mendiagnosis model berat
+- Cara mengukurnya (penting kalau nanti curiga ada blokir lagi): jalankan
+  Playwright dengan `drawElements`/`drawArrays` di-stub jadi no-op
+  (`scratchpad/jsonly.mjs`). Tanpa itu, biaya rasterisasi software SwiftShader
+  di sandbox (detik per frame) menutupi kerja JS. Hasil setelah perbaikan:
+  jeda JS terburuk setelah siap **193 ms** (60k elemen) / **217 ms**
+  (8 juta segitiga) — sebelumnya bermenit-menit
+
 ### 5 September 2026 (malam)
 - **Fix: model besar bikin halaman "stuck" di layar Menyiapkan model 3D.**
   Tiga sebab, semuanya diperbaiki: (1) penggabungan geometri dijalankan DUA
@@ -702,3 +735,26 @@ Detail lengkap ada di `README.md`.
     `engine.setInsets()` supaya label 3D tidak menyelinap ke bawah panel.
     Uji tumpang tindih ada di `scratchpad/overlap.mjs` (kotak semua overlay
     dibandingkan berpasangan).
+
+46. **Jangan bangun BVH (atau indeks berat apa pun) di main thread.**
+    `new MeshBVH()` untuk geometri puluhan juta segitiga = halaman mati
+    bermenit-menit, dan tidak ada API untuk mencicilnya. Untuk kebutuhan
+    "klik memilih objek" beberapa kali per detik, uji kotak batas + segitiga
+    kandidat sudah jauh lebih dari cukup dan tidak butuh pembangunan indeks.
+
+47. **Ukur blokir JS dengan menonaktifkan gambar, bukan dengan FPS.** Di
+    sandbox tanpa GPU, satu frame bisa memakan detik dan menutupi semuanya.
+    Stub `WebGLRenderingContext.prototype.drawElements` lewat
+    `page.addInitScript`, lalu ukur jeda terburuk antar `requestAnimationFrame`.
+
+48. **Frustum culling butuh bola pembatas yang BENAR.** Petak dibuat dengan
+    `frustumCulled = false` dulu (bola masih sebesar model), baru dinyalakan
+    di `finishMerge` setelah `min`/`max` tiap petak terkumpul dari vertex yang
+    sudah ditransformasi. Kalau bolanya terlalu kecil, sebagian model hilang
+    saat kamera bergerak — dan itu tidak selalu kelihatan di model uji kecil.
+
+49. **Kotak batas bukan jawaban akhir saat memilih.** Kalau segitiga sebuah
+    elemen sudah diuji dan meleset, jangan jatuhkan ke jarak kotaknya — klik
+    di ruang kosong akan memilih elemen yang kebetulan kotaknya kena sinar.
+    Kotak hanya dipakai untuk elemen yang sengaja dilewati karena terlalu
+    besar (> 60.000 segitiga).

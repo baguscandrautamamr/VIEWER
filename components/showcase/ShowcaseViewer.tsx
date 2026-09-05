@@ -72,6 +72,7 @@ export default function ShowcaseViewer({
   const selLabelRef = useRef<HTMLDivElement>(null);
 
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<LoadProgress>({ value: 0, stage: 'download' });
   const [elements, setElements] = useState<ElementInfo[]>([]);
   const [mode, setMode] = useState<ViewMode>('orbit');
@@ -183,7 +184,10 @@ export default function ShowcaseViewer({
         setElements(engine.elements);
         setShadows(engine.shadowsOn);
       }),
-      engine.on('error', () => setLoadState('error')),
+      engine.on('error', (kind) => {
+        setLoadError(kind === 'context-lost' ? s.contextLost : s.loadError);
+        setLoadState('error');
+      }),
       engine.on('select', (gid) => {
         setSelectedGid(gid);
         // Memilih elemen selalu membuka panel inspeksi (riwayat obrolan AI
@@ -1080,7 +1084,15 @@ export default function ShowcaseViewer({
           </div>
           <p className="mt-2 border-t border-white/10 pt-2 text-[10.5px] text-white/40">
             {elements.length.toLocaleString(locale === 'en' ? 'en-US' : 'id-ID')} {s.navCount.replace('{n} ', '')} ·{' '}
-            {stats ? tpl(s.statTriangles, { tri: (stats.triangles / 1e6).toFixed(1) }) : '—'} · {stats?.fps ?? 0} FPS
+            {stats ? tpl(s.statTriangles, { tri: (stats.triangles / 1e6).toFixed(1) }) : '—'}
+            {stats && stats.uniqueTriangles < stats.triangles * 0.95
+              ? ` (${
+                  stats.uniqueTriangles >= 1e6
+                    ? `${(stats.uniqueTriangles / 1e6).toFixed(1)} jt`
+                    : `${Math.round(stats.uniqueTriangles / 1000)} rb`
+                } unik · ${stats.instanced} geometri berulang)`
+              : ''}{' '}
+            · {stats?.fps ?? 0} FPS
             <br />
             {s.approx}
           </p>
@@ -1110,7 +1122,7 @@ export default function ShowcaseViewer({
             </div>
             <p className="mt-1 text-[11.5px] text-white/60">
               {loadState === 'error'
-                ? s.loadError
+                ? loadError ?? s.loadError
                 : progress.stage === 'download'
                   ? progress.total
                     ? `${s.loadingDownload} ${Math.round(progress.value / 0.55)}%`

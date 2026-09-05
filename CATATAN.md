@@ -105,6 +105,36 @@ Website presentasi model Revit ke client:
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
+### 6 September 2026
+- **Fix: 3D tidak tampil sama sekali (layar kosong) — WebGL context lost.**
+  Penyebabnya penggandaan geometri di penggabung: `addPiece` dipanggil per
+  INSTANCE mesh dan tiap instance menyalin seluruh vertex geometrinya,
+  padahal di model Revit banyak elemen BERBAGI geometri yang sama (tipe
+  family yang sama muncul puluhan kali). Model 3,5 juta segitiga unik
+  mengembang jadi ~34 juta segitiga / ~78 juta vertex ≈ 3,2 GB, alokasi
+  buffer GPU gagal, konteks WebGL dilepas, layar kosong.
+- **Perbaikan: geometri berulang dirender sebagai InstancedMesh.** Geometri
+  yang dipakai ≥ 4 kali (atau ≥ 2 kali kalau > 2.000 segitiga) disimpan
+  SEKALI; tiap elemen hanya menyumbang satu matriks 4×4 + satu warna
+  (`instanceColor`). Geometri unik tetap digabung per petak seperti
+  sebelumnya. Identitas, sorotan, warna asli, dan klik-pilih tetap per elemen.
+  Uji A/B pada model yang sama (17k elemen, 6,5 juta segitiga digambar):
+  **563 MB → 199 MB** heap JS, siap 16,6 s → 10,5 s.
+- **Memilih objek pada instans**: sinar dipindah ke ruang lokal geometri
+  (satu invers matriks per kandidat), diuji ke segitiga geometri bersama,
+  lalu titik tembusnya dikembalikan ke ruang dunia untuk dibandingkan.
+- **`webglcontextlost` ditangkap**: viewer menampilkan pesan yang jelas
+  ("memori grafis habis…") + saran pakai Mode teknis, bukan layar kosong.
+- Panel bantuan (?) sekarang menampilkan `X juta segitiga (Y unik · N
+  geometri berulang)` — kalau angka "digambar" jauh lebih besar dari "unik",
+  berarti instancing sedang bekerja.
+- **Catatan jujur:** diagnosis awal datang dari user yang mengecek lewat
+  asisten lain; klaimnya (34,3 juta segitiga & 78,5 juta vertex dari 3,5 juta
+  unik) cocok dengan kode dan dengan hitungan memori. Uji sandbox sebelumnya
+  TIDAK menangkap ini karena model uji buatan sendiri hanya punya 6 geometri
+  berbagi dengan pengulangan rendah — pelajaran: model uji harus meniru pola
+  PENGULANGAN geometri model asli, bukan sekadar jumlah elemen.
+
 ### 5 September 2026 (larut)
 - **Fix: halaman membeku ("Halaman Tidak Merespons") SETELAH model selesai
   dimuat.** Laporan user: 17.448 elemen sudah terbaca, dock sudah muncul,
@@ -758,3 +788,20 @@ Detail lengkap ada di `README.md`.
     di ruang kosong akan memilih elemen yang kebetulan kotaknya kena sinar.
     Kotak hanya dipakai untuk elemen yang sengaja dilewati karena terlalu
     besar (> 60.000 segitiga).
+
+50. **Menggabungkan geometri = MENGGANDAKAN geometri yang dipakai berulang.**
+    Ini jebakan paling mahal di viewer ini: renderer per-mesh menyimpan
+    geometri sekali dan menggambarnya N kali; penggabung menyalinnya N kali.
+    Di model Revit, pengulangan 10× itu biasa. Selalu hitung
+    `useCount` per `BufferGeometry` dulu, dan arahkan yang berulang ke
+    InstancedMesh. Ukuran file GLB TIDAK memberi petunjuk soal ini — file
+    5 MB bisa mengembang jadi ratusan MB di memori.
+
+51. **Ukur memori, bukan cuma waktu.** `performance.memory.usedJSHeapSize`
+    (Chrome, dengan `--enable-precise-memory-info`) memberi angka yang bisa
+    dibandingkan A/B. Layar kosong tanpa error di console hampir selalu
+    berarti konteks WebGL hilang — pasang listener `webglcontextlost`.
+
+52. **Warna pada InstancedMesh lewat `instanceColor`, bukan warna per-vertex.**
+    Materialnya harus putih (warna dikalikan), dan alpha tidak tersedia per
+    instans — jadi transparansi untuk kelompok instans ditentukan materialnya.

@@ -95,6 +95,13 @@ sebagai **warna per-vertex** (Uint8, 4 byte), klik/hover memakai **BVH**
 (`three-mesh-bvh`) dengan identitas per-vertex, dan bayangan dirender sekali
 (shadow map statis).
 
+Geometri yang **dipakai berulang** (tipe family yang sama muncul puluhan kali)
+tidak ikut digabung — itu dirender sebagai `InstancedMesh`: geometrinya
+disimpan sekali, tiap elemen hanya menyumbang satu matriks + satu warna. Ini
+penting: menyalinnya berulang pernah membuat model 3,5 juta segitiga unik
+mengembang jadi 34 juta segitiga (~3,2 GB) sehingga browser melepas konteks
+WebGL dan layar jadi kosong. Uji A/B pada model yang sama: 563 MB → 199 MB.
+
 Geometri gabungan dipecah lagi per **petak denah**, jadi petak yang di luar
 layar dilewati GPU (frustum culling) — terasa saat berjalan di dalam bangunan
 besar. Memilih objek **tidak memakai indeks BVH** (membangunnya membekukan
@@ -110,8 +117,12 @@ detik), jeda JavaScript terpanjang setelah siap ~0,2 detik, dan biaya per frame
 
 Untuk model sangat berat, viewer menurunkan kualitas sendiri: di atas 6 juta
 segitiga **bayangan dimatikan otomatis** (dengan pemberitahuan, bisa dinyalakan
-lagi di panel kiri). Jumlah elemen, jumlah segitiga, dan FPS bisa dilihat di
-panel **?** kanan atas — kirimkan angka itu kalau tampilan masih terasa berat.
+lagi di panel kiri). Kalau browser tetap melepas konteks WebGL, viewer
+menampilkan pesan jelas — bukan layar kosong.
+
+Panel **?** kanan atas menunjukkan jumlah elemen, segitiga yang digambar,
+segitiga unik, jumlah geometri berulang, dan FPS — kirimkan angka itu kalau
+tampilan masih terasa berat.
 
 Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
 tidak terasa. Mode teknis tetap merender per elemen seperti semula.

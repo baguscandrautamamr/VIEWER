@@ -14,10 +14,16 @@ import type { CameraPose, ElementInfo, ViewMode } from './types';
 // menoleh), label elemen, minimap, tur kamera beranimasi.
 //
 // PERFORMA — ini yang membedakan dari viewer teknis:
-//  * Seluruh model DIGABUNG jadi dua mesh saja (padat & tembus pandang).
-//    Model Revit besar punya puluhan ribu elemen; kalau tiap elemen jadi mesh
+//  * Model Revit besar punya puluhan ribu elemen; kalau tiap elemen jadi mesh
 //    sendiri, tiap frame = puluhan ribu draw call dan navigasi tersendat apa
-//    pun GPU-nya. Setelah digabung: 2 draw call.
+//    pun GPU-nya. Karena itu geometri disatukan — TAPI dengan dua jalur:
+//      - Geometri yang dipakai BERULANG (tipe family yang sama muncul puluhan
+//        kali) dirender sebagai InstancedMesh: geometrinya disimpan SEKALI,
+//        tiap elemen hanya menyumbang satu matriks 4×4 + satu warna.
+//      - Geometri yang unik digabung jadi buffer besar per petak.
+//    Ini WAJIB: menyalin geometri berulang ke buffer gabungan pernah membuat
+//    model 3,5 juta segitiga mengembang jadi 34 juta segitiga / 78 juta vertex
+//    (~3,2 GB) sehingga browser kehilangan konteks WebGL dan layar jadi kosong.
 //  * Penggabungan dilakukan SEKALI dan BERTAHAP (dicicil per frame dengan
 //    anggaran waktu), jadi halaman tidak pernah membeku dan progresnya
 //    kelihatan. Nama elemen yang datang belakangan dari database hanya
@@ -47,7 +53,9 @@ export interface EngineStats {
   eyeHeight: number; // tinggi kamera dari dasar model (m)
   position: [number, number, number];
   mode: ViewMode;
-  triangles: number;
+  triangles: number; // segitiga yang digambar
+  uniqueTriangles: number; // segitiga unik (geometri berulang dihitung sekali)
+  instanced: number; // jumlah kelompok geometri berulang
   // true kalau mesin menurunkan kualitas sendiri karena model terlalu berat.
   lightened: boolean;
 }
@@ -125,18 +133,16 @@ const COLORS = {
 const MONO_GLASS_ALPHA = 82; // 0–255
 const HIGHLIGHT_GLASS_ALPHA = 153;
 
-// Satu "slot" = satu mesh gabungan: kombinasi petak denah × (padat/tembus).
-interface VertexRange {
-  part: number; // indeks slot di `this.parts`
-  vStart: number;
-  vCount: number;
-  tStart: number; // segitiga pertama milik potongan ini
-  tCount: number;
-}
+// Di mana geometri sebuah elemen berada.
+//   kind 0 = disalin ke buffer gabungan (petak) `this.parts[part]`
+//   kind 1 = satu instans pada `this.instGroups[group]`
+type Placement =
+  | { kind: 0; part: number; vStart: number; vCount: number; tStart: number; tCount: number }
+  | { kind: 1; group: number; instance: number };
 
 interface ElementRecord extends ElementInfo {
   eid: number;
-  ranges: VertexRange[];
+  ranges: Placement[];
   hasRealName: boolean;
   sheer: boolean;
   embeddedName: string | null;
@@ -148,16 +154,28 @@ interface MergedPart {
   geometry: THREE.BufferGeometry;
   color: THREE.BufferAttribute; // Uint8 RGBA (normalized) — warna tampil
   baseOriginal: Uint8Array; // warna material asli per vertex
-  vertexEid: Uint32Array; // vertex -> indeks di recordList (CPU saja)
   sheer: boolean;
   min: THREE.Vector3;
   max: THREE.Vector3;
 }
 
-// Satu mesh sumber (atau satu instance) yang menunggu disalin.
+// Satu geometri berulang + satu material -> satu InstancedMesh.
+interface InstGroup {
+  mesh: THREE.InstancedMesh;
+  geometry: THREE.BufferGeometry; // atribut dipakai bersama geometri sumber
+  base: THREE.Color; // warna material asli (sama untuk semua instans)
+  sheer: boolean;
+  tris: number; // segitiga per instans
+  matrices: THREE.Matrix4[]; // untuk uji sinar saat memilih objek
+  filled: number;
+}
+
+// Satu penempatan yang menunggu diproses (disalin atau dijadikan instans).
 interface Piece {
   rec: ElementRecord;
-  part: number;
+  instanced: boolean;
+  part: number; // slot petak (kind 0) — diisi setelah slot dibuat
+  groupIds: number[]; // indeks InstGroup (kind 1)
   geometry: THREE.BufferGeometry | null;
   matrix: THREE.Matrix4;
   vCount: number;
@@ -195,7 +213,9 @@ export class ShowcaseEngine {
   // dipakai uji sinar saat memilih objek, tanpa alokasi objek per klik.
   private recordBoxes = new Float32Array(0);
   private parts: MergedPart[] = [];
-  private triangles = 0;
+  private instGroups: InstGroup[] = [];
+  private triangles = 0; // segitiga yang benar-benar digambar
+  private uniqueTriangles = 0; // segitiga unik (tanpa pengulangan instans)
   private slowFrames = 0;
   private autoLightened = false;
   private modelGroup: THREE.Group | null = null;
@@ -211,6 +231,16 @@ export class ShowcaseEngine {
     vertexColors: true,
     roughness: 0.4,
     transparent: true,
+    depthWrite: false,
+  });
+  // Untuk InstancedMesh warna datang dari instanceColor (per instans), bukan
+  // per vertex — jadi materialnya terpisah dan berwarna putih.
+  private matInst = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0.02 });
+  private matInstSheer = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.4,
+    transparent: true,
+    opacity: MONO_GLASS_ALPHA / 255,
     depthWrite: false,
   });
   private cMono = u8(COLORS.mono);
@@ -256,6 +286,8 @@ export class ShowcaseEngine {
   private tmpB = new THREE.Vector3();
   private tmpC = new THREE.Vector3();
   private tmpHit = new THREE.Vector3();
+  private tmpMat = new THREE.Matrix4();
+  private tmpRay = new THREE.Ray();
   private pickCands: number[] = [];
 
   // --- label & minimap (DOM langsung) ---
@@ -314,6 +346,15 @@ export class ShowcaseEngine {
     fill.position.set(-50, 30, -40);
     this.scene.add(hemi, ambient, this.keyLight, this.keyLight.target, fill);
     this.scene.fog = new THREE.Fog(COLORS.fog, 400, 1500);
+
+    // Kalau browser sampai melepas konteks WebGL (mis. alokasi buffer gagal
+    // karena model terlalu berat), layar jadi kosong tanpa penjelasan. Tangkap
+    // dan laporkan supaya UI bisa memberi tahu + menawarkan Mode teknis.
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      console.error('WebGL context lost');
+      this.emit('error', 'context-lost');
+    });
 
     this.bindInput();
     this.loop();
@@ -407,31 +448,61 @@ export class ShowcaseEngine {
     this.beginMerge(root, parser, token);
   }
 
-  // Pass 1 (murah, tanpa menyentuh isi vertex): kumpulkan daftar potongan,
-  // identitas elemen, dan hitung total vertex/index per bagian.
+  // Pass 1 (murah): kumpulkan penempatan, putuskan mana yang jadi INSTANS
+  // (geometri berulang) dan mana yang digabung, lalu siapkan buffer.
   private beginMerge(root: THREE.Object3D, parser: { associations: Map<unknown, unknown>; json: unknown }, token: number) {
     const pieces: Piece[] = [];
-    // key slot = petak * 2 + (tembus ? 1 : 0)  ->  { v, i }
-    const counts = new Map<number, { v: number; i: number }>();
-    const geomUse = new Map<THREE.BufferGeometry, number>();
+    const counts = new Map<number, { v: number; i: number }>(); // slot petak -> jumlah
     const white = new THREE.Color(0xffffff);
+
+    // Berapa kali tiap geometri dipakai? Ini kunci: geometri yang dipakai
+    // berulang TIDAK boleh disalin berkali-kali ke buffer gabungan.
+    const useCount = new Map<THREE.BufferGeometry, number>();
+    const meshes: { mesh: THREE.Mesh; gid: string; matrix: THREE.Matrix4 }[] = [];
+    const instMatrix = new THREE.Matrix4();
+    root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const geometry = child.geometry as THREE.BufferGeometry;
+      if (!geometry?.getAttribute('position')) return;
+      const inst = child as THREE.InstancedMesh;
+      if (inst.isInstancedMesh) {
+        for (let i = 0; i < inst.count; i++) {
+          inst.getMatrixAt(i, instMatrix);
+          meshes.push({
+            mesh: child,
+            gid: `unmapped:${child.uuid}#${i}`,
+            matrix: new THREE.Matrix4().multiplyMatrices(child.matrixWorld, instMatrix),
+          });
+          useCount.set(geometry, (useCount.get(geometry) ?? 0) + 1);
+        }
+        return;
+      }
+      let gid = child.userData.globalId as string | undefined;
+      if (!gid) {
+        const identity = resolveModelIdentity(child, root, parser as never);
+        gid = identity?.globalId ?? `unmapped:${child.uuid}`;
+        child.userData.globalId = gid;
+        if (identity) child.userData.identity = identity;
+      }
+      meshes.push({ mesh: child, gid, matrix: child.matrixWorld.clone() });
+      useCount.set(geometry, (useCount.get(geometry) ?? 0) + 1);
+    });
 
     // Ukuran grid petak: sekitar 1.500 potongan per petak, maksimum 6×6.
     const b = this.bounds;
     const spanX = b.max[0] - b.min[0] || 1;
     const spanZ = b.max[2] - b.min[2] || 1;
-    let meshCount = 0;
-    root.traverse((c) => {
-      if (c instanceof THREE.Mesh) meshCount += Math.max(1, (c as THREE.InstancedMesh).isInstancedMesh ? (c as THREE.InstancedMesh).count : 1);
-    });
-    const grid = THREE.MathUtils.clamp(Math.ceil(Math.sqrt(meshCount / 1500)), 1, 6);
+    const grid = THREE.MathUtils.clamp(Math.ceil(Math.sqrt(meshes.length / 1500)), 1, 6);
     const centroid = new THREE.Vector3();
     const sample = new THREE.Vector3();
 
-    const addPiece = (mesh: THREE.Mesh, gid: string, matrix: THREE.Matrix4) => {
+    // Kelompok instans: satu per (geometri, grup material).
+    const groupKey = new Map<string, number>();
+    const instCount = new Map<number, number>();
+
+    for (const { mesh, gid, matrix } of meshes) {
       const geometry = mesh.geometry as THREE.BufferGeometry;
       const pos = geometry.getAttribute('position');
-      if (!pos) return;
       if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
 
       let rec = this.records.get(gid);
@@ -443,77 +514,121 @@ export class ShowcaseEngine {
         rec.eid = this.recordList.length;
         this.recordList.push(rec);
       }
-      // Petak ditentukan dari perkiraan titik tengah potongan — cukup ambil
-      // beberapa vertex contoh, tidak perlu melewati seluruh geometri.
-      centroid.set(0, 0, 0);
-      const step = Math.max(1, Math.floor(pos.count / 8));
-      let taken = 0;
-      for (let k = 0; k < pos.count; k += step) {
-        centroid.add(sample.fromBufferAttribute(pos, k));
-        taken++;
-      }
-      if (taken > 0) centroid.multiplyScalar(1 / taken).applyMatrix4(matrix);
-      const tx = THREE.MathUtils.clamp(Math.floor(((centroid.x - b.min[0]) / spanX) * grid), 0, grid - 1);
-      const tz = THREE.MathUtils.clamp(Math.floor(((centroid.z - b.min[2]) / spanZ) * grid), 0, grid - 1);
-      const slot = (tz * grid + tx) * 2 + (rec.sheer ? 1 : 0);
-      let count = counts.get(slot);
-      if (!count) {
-        count = { v: 0, i: 0 };
-        counts.set(slot, count);
-      }
+
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const indexTotal = geometry.index ? geometry.index.count : pos.count;
       const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: indexTotal, materialIndex: 0 }];
+      const uses = useCount.get(geometry) ?? 1;
+      // Dijadikan instans kalau dipakai berulang — ambangnya rendah untuk
+      // geometri besar, karena di situ penggandaan paling mahal.
+      const instanced = uses >= 4 || (uses >= 2 && indexTotal / 3 > 2000);
+
       const outGroups: Piece['groups'] = [];
+      const groupIds: number[] = [];
       for (const g of groups) {
         const gCount = g.count === Infinity ? indexTotal - g.start : Math.min(g.count, indexTotal - g.start);
         if (gCount <= 0) continue;
         const m = (mats[g.materialIndex ?? 0] ?? mats[0]) as THREE.MeshStandardMaterial & { map?: THREE.Texture | null };
         const c = m?.color ?? white;
-        // Tekstur tidak ikut (warna per-vertex saja); material bertekstur
-        // biasanya putih -> diredam sedikit supaya tidak menyilaukan.
+        // Tekstur tidak ikut (warna saja); material bertekstur biasanya putih
+        // -> diredam sedikit supaya tidak menyilaukan.
         const tint = m?.map ? 0.8 : 1;
         const alpha = rec.sheer ? Math.round(THREE.MathUtils.clamp((m?.transparent ? m.opacity : 1) || 0.3, 0.12, 0.6) * 255) : 255;
-        outGroups.push({
-          start: g.start,
-          count: gCount,
-          color: [Math.round(c.r * 255 * tint), Math.round(c.g * 255 * tint), Math.round(c.b * 255 * tint), alpha],
-        });
-        count.i += gCount;
-      }
-      if (outGroups.length === 0) return;
-      count.v += pos.count;
-      rec.meshCount++;
-      geomUse.set(geometry, (geomUse.get(geometry) ?? 0) + 1);
-      pieces.push({ rec, part: slot, geometry, matrix, vCount: pos.count, groups: outGroups });
-    };
-
-    const instMatrix = new THREE.Matrix4();
-    root.traverse((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      const inst = child as THREE.InstancedMesh;
-      if (inst.isInstancedMesh) {
-        // Instance dibentangkan jadi potongan terpisah — kalau dilewati,
-        // objeknya HILANG dari model gabungan.
-        for (let i = 0; i < inst.count; i++) {
-          inst.getMatrixAt(i, instMatrix);
-          addPiece(child, `unmapped:${child.uuid}#${i}`, new THREE.Matrix4().multiplyMatrices(child.matrixWorld, instMatrix));
+        if (instanced) {
+          const key = `${geometry.uuid}|${g.start}|${gCount}|${m?.uuid ?? 'x'}`;
+          let gi = groupKey.get(key);
+          if (gi === undefined) {
+            gi = this.instGroups.length;
+            groupKey.set(key, gi);
+            // Sub-geometri: atribut DIPAKAI BERSAMA geometri sumber (tidak
+            // disalin), hanya index-nya yang dipotong sesuai grup material.
+            const sub = new THREE.BufferGeometry();
+            sub.setAttribute('position', geometry.getAttribute('position'));
+            sub.setAttribute('normal', geometry.getAttribute('normal'));
+            const src = geometry.index;
+            const idx = new Uint32Array(gCount);
+            for (let k = 0; k < gCount; k++) idx[k] = src ? src.getX(g.start + k) : g.start + k;
+            sub.setIndex(new THREE.BufferAttribute(idx, 1));
+            sub.computeBoundingBox();
+            sub.computeBoundingSphere();
+            this.instGroups.push({
+              mesh: null as unknown as THREE.InstancedMesh, // diisi setelah jumlah instans diketahui
+              geometry: sub,
+              base: new THREE.Color(c.r * tint, c.g * tint, c.b * tint),
+              sheer: rec.sheer,
+              tris: gCount / 3,
+              matrices: [],
+              filled: 0,
+            });
+          }
+          groupIds.push(gi);
+          instCount.set(gi, (instCount.get(gi) ?? 0) + 1);
+        } else {
+          outGroups.push({
+            start: g.start,
+            count: gCount,
+            color: [Math.round(c.r * 255 * tint), Math.round(c.g * 255 * tint), Math.round(c.b * 255 * tint), alpha],
+          });
         }
-        return;
       }
-      let gid = child.userData.globalId as string | undefined;
-      if (!gid) {
-        const identity = resolveModelIdentity(child, root, parser as never);
-        gid = identity?.globalId ?? `unmapped:${child.uuid}`;
-        child.userData.globalId = gid;
-        if (identity) child.userData.identity = identity;
-      }
-      addPiece(child, gid, child.matrixWorld.clone());
-    });
+      if (outGroups.length === 0 && groupIds.length === 0) continue;
+      rec.meshCount++;
 
-    // Slot yang benar-benar terpakai -> indeks berurutan di this.parts.
-    const slotIndex = new Map<number, number>();
+      let slot = 0;
+      if (!instanced) {
+        // Petak dari perkiraan titik tengah — cukup beberapa vertex contoh.
+        centroid.set(0, 0, 0);
+        const step = Math.max(1, Math.floor(pos.count / 8));
+        let taken = 0;
+        for (let k = 0; k < pos.count; k += step) {
+          centroid.add(sample.fromBufferAttribute(pos, k));
+          taken++;
+        }
+        if (taken > 0) centroid.multiplyScalar(1 / taken).applyMatrix4(matrix);
+        const tx = THREE.MathUtils.clamp(Math.floor(((centroid.x - b.min[0]) / spanX) * grid), 0, grid - 1);
+        const tz = THREE.MathUtils.clamp(Math.floor(((centroid.z - b.min[2]) / spanZ) * grid), 0, grid - 1);
+        slot = (tz * grid + tx) * 2 + (rec.sheer ? 1 : 0);
+        let count = counts.get(slot);
+        if (!count) {
+          count = { v: 0, i: 0 };
+          counts.set(slot, count);
+        }
+        count.v += pos.count;
+        for (const g of outGroups) count.i += g.count;
+      }
+      pieces.push({
+        rec,
+        instanced,
+        part: slot,
+        groupIds,
+        geometry,
+        matrix,
+        vCount: pos.count,
+        groups: outGroups,
+      });
+    }
+
+    // --- buat InstancedMesh setelah jumlah instans diketahui
     const group = new THREE.Group();
+    this.uniqueTriangles = 0;
+    for (let gi = 0; gi < this.instGroups.length; gi++) {
+      const ig = this.instGroups[gi];
+      const n = instCount.get(gi) ?? 0;
+      const mesh = new THREE.InstancedMesh(ig.geometry, ig.sheer ? this.matInstSheer : this.matInst, Math.max(n, 1));
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(n, 1) * 3), 3);
+      mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+      mesh.castShadow = !ig.sheer;
+      mesh.receiveShadow = !ig.sheer;
+      mesh.renderOrder = ig.sheer ? 1 : 0;
+      mesh.frustumCulled = false; // dinyalakan setelah semua instans terisi
+      ig.mesh = mesh;
+      group.add(mesh);
+      this.uniqueTriangles += ig.tris;
+    }
+
+    // --- buat buffer gabungan untuk geometri unik
+    const slotIndex = new Map<number, number>();
     for (const [slot, total] of Array.from(counts.entries()).sort((a, c) => a[0] - c[0])) {
       if (total.v === 0) continue;
       slotIndex.set(slot, this.parts.length);
@@ -526,8 +641,6 @@ export class ShowcaseEngine {
       geometry.setAttribute('color', color);
       geometry.setIndex(new THREE.BufferAttribute(total.v > 65535 ? new Uint32Array(total.i) : new Uint16Array(total.i), 1));
       geometry.setDrawRange(0, 0);
-      // Sementara pakai bola sebesar model; diperkecil ke ukuran petak yang
-      // sebenarnya di finishMerge supaya frustum culling bekerja.
       const r = Math.hypot(...this.bounds.max.map((v, i) => v - this.bounds.min[i])) / 2 || 1;
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), r);
 
@@ -542,24 +655,23 @@ export class ShowcaseEngine {
         geometry,
         color,
         baseOriginal: new Uint8Array(total.v * 4),
-        vertexEid: new Uint32Array(total.v),
         sheer,
         min: new THREE.Vector3(Infinity, Infinity, Infinity),
         max: new THREE.Vector3(-Infinity, -Infinity, -Infinity),
       });
+      this.uniqueTriangles += total.i / 3;
     }
-    // Potongan menyimpan KEY slot; ubah ke indeks larik.
-    for (const piece of pieces) piece.part = slotIndex.get(piece.part) ?? 0;
+    for (const piece of pieces) if (!piece.instanced) piece.part = slotIndex.get(piece.part) ?? 0;
+
     this.scene.add(group);
     this.modelGroup = group;
-
     this.merge = {
       token,
       pieces,
       pi: 0,
       vOff: new Array(this.parts.length).fill(0),
       iOff: new Array(this.parts.length).fill(0),
-      geomUse,
+      geomUse: new Map(),
     };
     this.emit('progress', { value: 55, stage: 'prepare' });
     this.scheduleMerge();
@@ -574,21 +686,51 @@ export class ShowcaseEngine {
     }, 0);
   }
 
-  // Pass 2, dicicil: salin vertex (sudah ditransformasi ke world) + index.
+  // Pass 2, dicicil. Instans hanya perlu satu matriks (murah); geometri unik
+  // disalin vertex demi vertex ke buffer gabungan.
   private stepMerge() {
     const st = this.merge;
     if (!st || st.token !== this.loadToken) return;
     const t0 = performance.now();
     const v = new THREE.Vector3();
     const normalMatrix = new THREE.Matrix3();
+    const tmpBox = new THREE.Box3();
     // Awal potongan ini per bagian — dipakai untuk upload PARSIAL ke GPU.
-    // Tanpa ini, `needsUpdate = true` mengirim ulang SELURUH buffer (bisa
-    // ratusan MB) pada setiap potongan, dan justru itu yang bikin macet.
     const sliceV = st.vOff.slice();
     const sliceI = st.iOff.slice();
 
     while (st.pi < st.pieces.length) {
       const piece = st.pieces[st.pi];
+
+      if (piece.instanced) {
+        for (const gi of piece.groupIds) {
+          const ig = this.instGroups[gi];
+          const i = ig.filled++;
+          ig.mesh.setMatrixAt(i, piece.matrix);
+          ig.matrices.push(piece.matrix);
+          piece.rec.ranges.push({ kind: 1, group: gi, instance: i });
+          // Kotak batas elemen dari kotak geometri yang ditransformasi —
+          // tanpa menyentuh satu pun vertex.
+          if (ig.geometry.boundingBox) {
+            tmpBox.copy(ig.geometry.boundingBox).applyMatrix4(piece.matrix);
+            piece.rec.min = [
+              Math.min(piece.rec.min[0], tmpBox.min.x),
+              Math.min(piece.rec.min[1], tmpBox.min.y),
+              Math.min(piece.rec.min[2], tmpBox.min.z),
+            ];
+            piece.rec.max = [
+              Math.max(piece.rec.max[0], tmpBox.max.x),
+              Math.max(piece.rec.max[1], tmpBox.max.y),
+              Math.max(piece.rec.max[2], tmpBox.max.z),
+            ];
+          }
+        }
+        this.paintRecord(piece.rec);
+        st.pi++;
+        if (performance.now() - t0 > MERGE_BUDGET_MS) break;
+        continue;
+      }
+
       const part = this.parts[piece.part];
       const geometry = piece.geometry;
       if (!part || !geometry) {
@@ -624,37 +766,25 @@ export class ShowcaseEngine {
         normal[o] = v.x;
         normal[o + 1] = v.y;
         normal[o + 2] = v.z;
-        part.vertexEid[vOff + k] = rec.eid;
       }
 
       let gi = iOff;
       for (const g of piece.groups) {
-        const [r, gg, b, a] = g.color;
-        if (src) {
-          for (let k = 0; k < g.count; k++) {
-            const vi = src.getX(g.start + k) + vOff;
-            index[gi + k] = vi;
-            const co = vi * 4;
-            part.baseOriginal[co] = r;
-            part.baseOriginal[co + 1] = gg;
-            part.baseOriginal[co + 2] = b;
-            part.baseOriginal[co + 3] = a;
-          }
-        } else {
-          for (let k = 0; k < g.count; k++) {
-            const vi = g.start + k + vOff;
-            index[gi + k] = vi;
-            const co = vi * 4;
-            part.baseOriginal[co] = r;
-            part.baseOriginal[co + 1] = gg;
-            part.baseOriginal[co + 2] = b;
-            part.baseOriginal[co + 3] = a;
-          }
+        const [r, gg, bl, a] = g.color;
+        for (let k = 0; k < g.count; k++) {
+          const vi = (src ? src.getX(g.start + k) : g.start + k) + vOff;
+          index[gi + k] = vi;
+          const co = vi * 4;
+          part.baseOriginal[co] = r;
+          part.baseOriginal[co + 1] = gg;
+          part.baseOriginal[co + 2] = bl;
+          part.baseOriginal[co + 3] = a;
         }
         gi += g.count;
       }
 
       rec.ranges.push({
+        kind: 0,
         part: piece.part,
         vStart: vOff,
         vCount: piece.vCount,
@@ -666,20 +796,14 @@ export class ShowcaseEngine {
       st.vOff[piece.part] = vOff + piece.vCount;
       st.iOff[piece.part] = gi;
       part.geometry.setDrawRange(0, gi);
-
-      // Geometri sumber dilepas begitu potongan terakhir yang memakainya
-      // selesai — supaya memori puncak tidak dobel.
-      const left = (st.geomUse.get(geometry) ?? 1) - 1;
-      if (left <= 0) {
-        st.geomUse.delete(geometry);
-        geometry.dispose();
-      } else st.geomUse.set(geometry, left);
       piece.geometry = null;
 
       st.pi++;
       if (performance.now() - t0 > MERGE_BUDGET_MS) break;
     }
 
+    // Upload PARSIAL: tanpa ini `needsUpdate` mengirim ulang SELURUH buffer
+    // (bisa ratusan MB) pada setiap potongan.
     for (let part = 0; part < this.parts.length; part++) {
       const p = this.parts[part];
       if (!p) continue;
@@ -704,6 +828,10 @@ export class ShowcaseEngine {
         idx.needsUpdate = true;
       }
     }
+    for (const ig of this.instGroups) {
+      ig.mesh.instanceMatrix.needsUpdate = true;
+      if (ig.mesh.instanceColor) ig.mesh.instanceColor.needsUpdate = true;
+    }
 
     if (st.pi >= st.pieces.length) this.finishMerge();
     else this.emit('progress', { value: 55 + (st.pi / st.pieces.length) * 44, stage: 'prepare' });
@@ -713,30 +841,32 @@ export class ShowcaseEngine {
     this.merge = null;
     window.clearTimeout(this.mergeTimer);
 
-    // Bola pembatas per petak dihitung dari isi sebenarnya, lalu frustum
-    // culling dinyalakan: petak di luar layar tidak digambar sama sekali.
+    // Bola pembatas per petak & per kelompok instans dihitung dari isi
+    // sebenarnya, lalu frustum culling dinyalakan.
     this.triangles = 0;
     for (const p of this.parts) {
-      const idx = p.geometry.index;
-      this.triangles += idx ? p.geometry.drawRange.count / 3 : 0;
+      this.triangles += p.geometry.drawRange.count / 3;
       if (!Number.isFinite(p.min.x)) continue;
       const center = p.min.clone().add(p.max).multiplyScalar(0.5);
       p.geometry.boundingSphere = new THREE.Sphere(center, p.min.distanceTo(p.max) / 2 || 1);
       p.geometry.boundingBox = new THREE.Box3(p.min.clone(), p.max.clone());
       p.mesh.frustumCulled = true;
     }
+    for (const ig of this.instGroups) {
+      ig.mesh.count = ig.filled; // sisa slot (kalau ada) tidak digambar
+      ig.mesh.computeBoundingSphere();
+      ig.mesh.frustumCulled = true;
+      this.triangles += ig.tris * ig.filled;
+    }
 
     this.finishIndex();
     this.repaintAll();
 
-    // Model sangat berat: bayangan dimatikan otomatis (lintasan bayangan
-    // menggandakan kerja vertex). Bisa dinyalakan lagi dari panel Tampilan.
     if (this.triangles > HEAVY_TRIANGLES && this.shadowsWanted) {
       this.setShadows(false);
       this.autoLightened = true;
     } else if (this.triangles > 1_500_000) {
       // Peta bayangan dirender sekali, tapi sekali itu melewati SELURUH model.
-      // Untuk model besar, 1024² sudah cukup dan jauh lebih murah.
       this.keyLight.shadow.mapSize.set(1024, 1024);
       this.keyLight.shadow.map?.dispose();
       this.keyLight.shadow.map = null;
@@ -744,7 +874,6 @@ export class ShowcaseEngine {
     this.renderer.shadowMap.needsUpdate = true;
     this.emit('progress', { value: 100, stage: 'prepare' });
     this.emit('ready', undefined);
-    // Baru sekarang animasi masuk dijalankan — modelnya sudah utuh.
     this.flyTo(isoPose(this.bounds), 1.8);
   }
 
@@ -754,6 +883,9 @@ export class ShowcaseEngine {
   }
   get triangleCount() {
     return this.triangles;
+  }
+  get uniqueTriangleCount() {
+    return this.uniqueTriangles;
   }
 
   get isPreparing() {
@@ -770,6 +902,8 @@ export class ShowcaseEngine {
       this.scene.remove(this.modelGroup);
       for (const p of this.parts) p?.geometry.dispose();
     }
+    for (const ig of this.instGroups) ig.geometry.dispose();
+    this.instGroups = [];
     this.parts = [];
     this.modelGroup = null;
     this.merge = null;
@@ -777,6 +911,7 @@ export class ShowcaseEngine {
     this.recordList = [];
     this.recordBoxes = new Float32Array(0);
     this.triangles = 0;
+    this.uniqueTriangles = 0;
     this.autoLightened = false;
     this.slowFrames = 0;
     this.elements = [];
@@ -959,6 +1094,24 @@ export class ShowcaseEngine {
     const sel = rec.gid === this.selectedGid;
     const hi = !sel && this.highlighted.has(rec.gid);
     for (const r of rec.ranges) {
+      if (r.kind === 1) {
+        // Instans: warnanya satu per instans (instanceColor), bukan per vertex.
+        const ig = this.instGroups[r.group];
+        if (!ig?.mesh.instanceColor) continue;
+        const arr = ig.mesh.instanceColor.array as Float32Array;
+        const o = r.instance * 3;
+        if (sel || hi || this.style === 'mono') {
+          const c = sel ? this.cSelected : hi ? this.cHighlight : ig.sheer ? this.cMonoGlass : this.cMono;
+          arr[o] = c[0] / 255;
+          arr[o + 1] = c[1] / 255;
+          arr[o + 2] = c[2] / 255;
+        } else {
+          arr[o] = ig.base.r;
+          arr[o + 1] = ig.base.g;
+          arr[o + 2] = ig.base.b;
+        }
+        continue;
+      }
       const part = this.parts[r.part];
       if (!part) continue;
       const arr = part.color.array as Uint8Array;
@@ -985,6 +1138,7 @@ export class ShowcaseEngine {
       p.color.clearUpdateRanges();
       p.color.needsUpdate = true;
     }
+    for (const ig of this.instGroups) if (ig.mesh.instanceColor) ig.mesh.instanceColor.needsUpdate = true;
   }
 
   // Cat ulang hanya elemen tertentu; upload ke GPU per rentang kalau sedikit.
@@ -1000,12 +1154,19 @@ export class ShowcaseEngine {
         p.color.clearUpdateRanges();
         p.color.needsUpdate = true;
       }
+      for (const ig of this.instGroups) if (ig.mesh.instanceColor) ig.mesh.instanceColor.needsUpdate = true;
       return;
     }
     const touched = new Set<MergedPart>();
+    const touchedInst = new Set<InstGroup>();
     for (const rec of list) {
       this.paintRecord(rec);
       for (const r of rec.ranges) {
+        if (r.kind === 1) {
+          const ig = this.instGroups[r.group];
+          if (ig) touchedInst.add(ig);
+          continue;
+        }
         const part = this.parts[r.part];
         if (!part) continue;
         part.color.addUpdateRange(r.vStart * 4, r.vCount * 4);
@@ -1013,6 +1174,8 @@ export class ShowcaseEngine {
       }
     }
     touched.forEach((p) => (p.color.needsUpdate = true));
+    // instanceColor kecil (3 float per instans) — upload penuh saja.
+    touchedInst.forEach((ig) => ig.mesh.instanceColor && (ig.mesh.instanceColor.needsUpdate = true));
   }
 
   select(gid: string | null) {
@@ -1484,7 +1647,7 @@ export class ShowcaseEngine {
   private hitDistance(ray: THREE.Ray, rec: ElementRecord): number {
     let best = Infinity;
     let tris = 0;
-    for (const r of rec.ranges) tris += r.tCount;
+    for (const r of rec.ranges) tris += r.kind === 1 ? (this.instGroups[r.group]?.tris ?? 0) : r.tCount;
     // Elemen raksasa (mis. permukaan tanah): cukup pakai jarak kotaknya.
     if (tris > PICK_EXACT_MAX_TRIS) return -1;
     const a = this.tmpA;
@@ -1492,6 +1655,33 @@ export class ShowcaseEngine {
     const c = this.tmpC;
     const target = this.tmpHit;
     for (const r of rec.ranges) {
+      if (r.kind === 1) {
+        // Instans: sinar dipindah ke ruang lokal geometri (satu invers
+        // matriks), lalu diuji ke segitiga geometri yang dipakai bersama.
+        const ig = this.instGroups[r.group];
+        if (!ig) continue;
+        const m = ig.matrices[r.instance];
+        if (!m) continue;
+        this.tmpMat.copy(m).invert();
+        this.tmpRay.copy(ray).applyMatrix4(this.tmpMat);
+        const pos = ig.geometry.getAttribute('position').array as Float32Array;
+        const index = ig.geometry.index!.array as Uint32Array;
+        for (let t = 0; t < index.length; t += 3) {
+          const i0 = index[t] * 3;
+          const i1 = index[t + 1] * 3;
+          const i2 = index[t + 2] * 3;
+          a.set(pos[i0], pos[i0 + 1], pos[i0 + 2]);
+          bb.set(pos[i1], pos[i1 + 1], pos[i1 + 2]);
+          c.set(pos[i2], pos[i2 + 1], pos[i2 + 2]);
+          if (this.tmpRay.intersectTriangle(a, bb, c, false, target)) {
+            // Kembalikan ke ruang dunia untuk membandingkan jarak antar elemen.
+            target.applyMatrix4(m);
+            const d = ray.origin.distanceTo(target);
+            if (d < best) best = d;
+          }
+        }
+        continue;
+      }
       const part = this.parts[r.part];
       if (!part) continue;
       const pos = part.geometry.getAttribute('position').array as Float32Array;
@@ -1846,6 +2036,8 @@ export class ShowcaseEngine {
         position: [p.x, p.y, p.z],
         mode: this.mode,
         triangles: this.triangles,
+        uniqueTriangles: this.uniqueTriangles,
+        instanced: this.instGroups.length,
         lightened: this.autoLightened,
       });
     }
@@ -1873,7 +2065,7 @@ export class ShowcaseEngine {
     this.controls.dispose();
     this.clearModel();
     this.ground?.geometry.dispose();
-    [this.matOpaque, this.matSheer].forEach((m) => m.dispose());
+    [this.matOpaque, this.matSheer, this.matInst, this.matInstSheer].forEach((m) => m.dispose());
     this.renderer.dispose();
     el.remove();
     this.labelLayer.remove();

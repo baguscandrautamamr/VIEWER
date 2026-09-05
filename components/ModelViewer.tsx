@@ -9,6 +9,7 @@ import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockCont
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { getSupabase } from '@/lib/supabase';
 import { locales, type Locale } from '@/lib/i18n';
+import { resolveModelIdentity } from '@/lib/modelIdentity.mjs';
 import MarkupOverlay from './MarkupOverlay';
 import SelectionTree, { type TreeCategory } from './SelectionTree';
 
@@ -104,6 +105,7 @@ export default function ModelViewer({
   const categoryByGlobalId = useRef<Map<string, string>>(new Map());
   // GlobalId -> nama elemen yang bisa dibaca manusia (dari tabel `elements`).
   const nameByGlobalId = useRef<Map<string, string>>(new Map());
+  const embeddedByGlobalId = useRef<Map<string, { name: string | null; category: string | null }>>(new Map());
   // Indeks cadangan: ElementId Revit (ekor angka pada Name IFC) -> kategori &
   // nama. Dipakai untuk objek GLB yang dinamai angka, bukan GlobalId.
   const elementByElementId = useRef<Map<string, { category: string | null; name: string | null }>>(
@@ -196,6 +198,7 @@ export default function ModelViewer({
   } | null>(null);
   const [liveUpdateMessage, setLiveUpdateMessage] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [unmappedMeshes, setUnmappedMeshes] = useState(0);
   const [markupOn, setMarkupOn] = useState(false);
   const [sectionOn, setSectionOn] = useState(false);
   const [clip, setClip] = useState({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
@@ -468,6 +471,7 @@ export default function ModelViewer({
           .from('elements')
           .select('global_id, category, name')
           .eq('project_id', projectId)
+          .order('global_id', { ascending: true })
           .range(from, from + PAGE - 1);
 
         if (!active) return;
@@ -752,7 +756,7 @@ export default function ModelViewer({
         pickIndex: index + 1,
         pickCount: candidates.length,
       });
-      onElementSelect?.(gid);
+      onElementSelect?.(gid?.startsWith('unmapped:') ? null : gid);
       const box = boxOfGid(gid ?? '', target);
       showSelectionBox(box);
       // Objek yang dipilih lewat Shift sengaja tidak memicu kamera bergerak —
@@ -1007,6 +1011,7 @@ export default function ModelViewer({
 
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     setLoadState('loading');
+    setUnmappedMeshes(0);
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath('/draco/');
@@ -1016,6 +1021,7 @@ export default function ModelViewer({
       (gltf) => {
         if (modelRootRef.current) scene.remove(modelRootRef.current);
         meshesByGlobalId.current.clear();
+        embeddedByGlobalId.current.clear();
         originalMaterials.current.clear();
         // Model diganti -> mesh lama dibuang, warna manual ikut hangus.
         colorMatByGid.current.forEach((mat) => mat.dispose());
@@ -1023,16 +1029,21 @@ export default function ModelViewer({
         selectedMeshRef.current = null;
         showSelectionBox(null); // mesh lama sudah dibuang, kotaknya ikut hilang
 
+        let unmapped = 0;
         gltf.scene.traverse((child) => {
           if (child instanceof THREE.Mesh) {
-            const raw = child.userData?.gltfExtensions?.globalId ?? child.name;
-            const globalId = normalizeMeshId(raw);
+            const identity = resolveModelIdentity(child, gltf.scene, gltf.parser);
+            // Unknown batches/meshes get a local selection key, never a made-up IFC identity.
+            const globalId = identity?.globalId ?? `unmapped:${child.uuid}`;
+            if (identity) embeddedByGlobalId.current.set(globalId, identity);
+            else unmapped++;
             child.userData.globalId = globalId;
             meshesByGlobalId.current.set(globalId, child);
             originalMaterials.current.set(child, child.material);
             if (highlightIds.includes(globalId)) flashHighlight(child);
           }
         });
+        setUnmappedMeshes(unmapped);
 
         scene.add(gltf.scene);
         modelRootRef.current = gltf.scene;
@@ -1066,7 +1077,7 @@ export default function ModelViewer({
       if (!byCat.has(cat)) byCat.set(cat, new Map());
       const inner = byCat.get(cat)!;
       // Utamakan nama dari tabel `elements`; `child.name` isinya GlobalId.
-      if (!inner.has(gid)) inner.set(gid, nameOf(gid) ?? (child.name || gid));
+      if (!inner.has(gid)) inner.set(gid, nameOf(gid) ?? (child.name || (gid.startsWith('unmapped:') ? 'Objek tanpa identitas' : gid)));
     });
     const cats: TreeCategory[] = Array.from(byCat.entries())
       .map(([category, inner]) => ({
@@ -1296,24 +1307,7 @@ export default function ModelViewer({
     return best;
   }
 
-  // Satu elemen bisa jadi BEBERAPA mesh di Three.js: kalau geometrinya punya
-  // lebih dari satu material, GLTFLoader membuat satu Mesh per primitive dan
-  // menamainya lewat createUniqueName -> "GUID", "GUID_1", "GUID_2". Akhiran
-  // itu dibuang supaya semua potongan satu elemen punya id yang sama; kalau
-  // tidak, isolate cuma menyalakan potongan yang kena klik dan potongan
-  // bersuffix gagal dicari namanya (tampil "Tanpa kategori").
-  //
-  // Akhiran hanya dibuang kalau sisanya masuk akal sebagai id: GlobalId selalu
-  // 22 karakter, ElementId selalu angka. Jadi GlobalId yang KEBETULAN berakhiran
-  // "_1" (masih 22 karakter) tidak ikut terpotong.
-  function normalizeMeshId(raw: string): string {
-    const m = /^(.+)_\d+$/.exec(raw || '');
-    if (!m) return raw;
-    const base = m[1];
-    return base.length === 22 || /^\d+$/.test(base) ? base : raw;
-  }
-
-  // Semua mesh milik satu elemen (lihat normalizeMeshId).
+  // Semua primitive milik satu elemen berbagi identitas dari node IFC induk.
   function forEachMeshOfGid(gid: string, cb: (mesh: THREE.Mesh) => void) {
     if (!gid) return;
     forEachMesh((mesh) => {
@@ -1333,6 +1327,8 @@ export default function ModelViewer({
   // belum diimpor, `child.name` isinya cuma GlobalId sehingga tidak berguna
   // untuk ditampilkan — kembalikan null supaya pemanggil bisa memilih fallback.
   function nameOf(gid: string): string | null {
+    const embedded = embeddedByGlobalId.current.get(gid)?.name;
+    if (embedded) return embedded;
     const direct = nameByGlobalId.current.get(gid);
     if (direct) return direct;
     const alt = altKeyOf(gid);
@@ -1351,6 +1347,8 @@ export default function ModelViewer({
 
   function categoryOf(mesh: THREE.Mesh): string | null {
     const gid = (mesh.userData.globalId as string) || '';
+    const embedded = embeddedByGlobalId.current.get(gid)?.category;
+    if (embedded) return embedded;
     const fromDb = categoryByGlobalId.current.get(gid);
     if (fromDb) return fromDb;
     const alt = altKeyOf(gid);
@@ -1545,7 +1543,7 @@ export default function ModelViewer({
       else isolateGid(gid);
     }
     setSelected({ globalId: gid, category: categoryOf(mesh), name: nameOf(gid), color: paintOf(gid) });
-    onElementSelect?.(gid);
+    onElementSelect?.(gid.startsWith('unmapped:') ? null : gid);
     // Sama seperti klik di 3D: kotak penanda, dan kamera mendekat hanya kalau
     // elemennya belum kelihatan jelas — dipilih dari panel biasanya memang
     // belum kelihatan, jadi di sini kamera hampir selalu bergerak.
@@ -1644,6 +1642,13 @@ export default function ModelViewer({
   return (
     <div ref={rootRef} className="relative h-full w-full overflow-hidden bg-background">
       <div ref={containerRef} className="h-full w-full" />
+      {loadState === 'ready' && unmappedMeshes > 0 && (
+        <div role="status" className="absolute bottom-10 left-16 right-4 z-20 rounded bg-amber-950/90 p-2 text-xs text-amber-100">
+          {locale === 'id'
+            ? `${unmappedMeshes} mesh/kelompok belum memiliki identitas elemen. Konversi ulang dari IFC dengan GUID dan tanpa GPU instancing untuk memilih setiap objek dengan benar.`
+            : `${unmappedMeshes} meshes/batches have no element identity. Re-export IFC with GUIDs and without GPU instancing for correct per-element selection.`}
+        </div>
+      )}
 
       {/* Panel Selection Tree (kiri, collapsible). */}
       <aside

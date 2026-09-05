@@ -93,6 +93,8 @@ if (projectId && (!SUPABASE_URL || !SERVICE_KEY)) {
 
 async function main() {
   const steps = projectId ? 3 : 2;
+  // Embed metadata even for offline/manual uploads, without a database import.
+  const rows = parseIfcElements(fs.readFileSync(ifcPath, 'utf8'));
 
   // 1) Convert IFC -> GLB (temp)
   console.error(`▶ [1/${steps}] Convert IFC -> GLB (${IFCCONVERT}) ...`);
@@ -107,7 +109,7 @@ async function main() {
   // 2) Kompresi Draco -> file akhir
   console.error(`▶ [2/${steps}] Kompresi Draco ...`);
   try {
-    const { before, after } = await compressGlb(tmpGlb, outputPath);
+    const { before, after } = await compressGlb(tmpGlb, outputPath, { elements: rows });
     const pct = Math.round((1 - after / before) * 100);
     console.error(`  ${fmtMB(before)} -> ${fmtMB(after)} (hemat ${pct}%)`);
   } catch (e) {
@@ -120,7 +122,6 @@ async function main() {
   // 3) Kirim nama & kategori elemen ke Supabase (kalau project_id diisi).
   if (projectId) {
     console.error(`▶ [3/${steps}] Kirim nama & kategori elemen ke Supabase ...`);
-    const rows = parseIfcElements(fs.readFileSync(ifcPath, 'utf8'));
     if (rows.length === 0) {
       console.error('  ⚠ Tidak ada elemen ber-GlobalId terbaca — tabel elements dilewati.');
     } else {
@@ -141,9 +142,8 @@ async function main() {
   console.error('   Upload file ini di halaman Kelola (Upload model GLB).');
   if (!projectId) {
     console.error(
-      '\n   ⚠ Tanpa project_id, nama & kategori elemen TIDAK dikirim — di viewer\n' +
-        '     semua objek akan tampil sebagai kode acak dan masuk kategori "Default".\n' +
-        '     Jalankan ulang dengan: node scripts/ifc-to-web.mjs <file.ifc> <project_id>'
+      '\n   Nama & kategori tersimpan di extras node GLB untuk viewer yang mendukungnya.\n' +
+        '   Sinkronisasi database opsional: node scripts/ifc-to-web.mjs <file.ifc> <project_id>'
     );
   }
   console.error('');

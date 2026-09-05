@@ -8,12 +8,14 @@ import { fetchElementNames } from '@/lib/showcase/elementNames';
 import { ShowcaseEngine, type EngineStats, type HoverInfo, type Style } from '@/lib/showcase/engine';
 import { resolveQuery } from '@/lib/showcase/search';
 import { buildAutoTour, EYE_LEVEL, type TourStrings } from '@/lib/showcase/tour';
+import { fetchSavedTour, saveTour } from '@/lib/showcase/tourStore';
 import type { AiAction, AiContext, CategorySummary, ElementInfo, TourStop, ViewMode } from '@/lib/showcase/types';
 import AiPanel, { useAiChat } from './AiPanel';
 import EquipmentNavigator from './EquipmentNavigator';
 import ExplorePanel, { type Viewpoint } from './ExplorePanel';
 import InspectionPanel from './InspectionPanel';
 import TourCard from './TourCard';
+import TourEditor from './TourEditor';
 import { Icons, Panel, tpl, type ShowcaseStrings } from './ui';
 
 // Viewer PRESENTASI (gaya video referensi "Plant / Field"): pengalaman untuk
@@ -32,9 +34,11 @@ interface Props {
   locale?: Locale;
   sheetCount?: number;
   onOpenSheets?: () => void;
+  // Admin: boleh menyusun & menyimpan tur terpandu.
+  canEdit?: boolean;
 }
 
-type SidePanel = 'none' | 'inspect' | 'ai' | 'help';
+type SidePanel = 'none' | 'inspect' | 'ai' | 'help' | 'tour';
 
 const PREFS_KEY = 'rwv_showcase';
 
@@ -46,6 +50,7 @@ export default function ShowcaseViewer({
   locale = 'id',
   sheetCount = 0,
   onOpenSheets,
+  canEdit = false,
 }: Props) {
   const s = locales[locale].showcase as ShowcaseStrings;
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -74,8 +79,15 @@ export default function ShowcaseViewer({
   const [aiConfig, setAiConfig] = useState<{ configured: boolean; model: string | null }>({ configured: false, model: null });
   const [aiDraft, setAiDraft] = useState<string | undefined>(undefined);
 
-  // Tur
-  const [tourStops, setTourStops] = useState<TourStop[]>([]);
+  // Tur. Tiga daftar: otomatis (dari isi model), tersimpan (DB), dan draft
+  // editor. Yang DIPAKAI: draft kalau ada isinya, kalau tidak -> otomatis.
+  const [autoStops, setAutoStops] = useState<TourStop[]>([]);
+  const [savedStops, setSavedStops] = useState<TourStop[]>([]);
+  const [editorStops, setEditorStops] = useState<TourStop[]>([]);
+  const tourStops = editorStops.length > 0 ? editorStops : autoStops;
+  const tourDirty = editorStops !== savedStops;
+  const [tourSaving, setTourSaving] = useState(false);
+  const [tourNotice, setTourNotice] = useState<string | null>(null);
   const [tourIndex, setTourIndex] = useState<number>(-1); // -1 = tidak aktif
   const [tourMoving, setTourMoving] = useState(false);
   const [tourAi, setTourAi] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
@@ -95,7 +107,11 @@ export default function ShowcaseViewer({
       disciplineTitle: {
         structure: s.discStructure,
         architecture: s.discArchitecture,
-        mep: s.discMep,
+        electrical: s.discElectrical,
+        plumbing: s.discPlumbing,
+        hvac: s.discHvac,
+        process: s.discProcess,
+        fire: s.discFire,
         site: s.discSite,
         other: s.discOther,
       },
@@ -104,7 +120,17 @@ export default function ShowcaseViewer({
     [s]
   );
   const discLabel = useMemo<Record<Discipline, string>>(
-    () => ({ structure: s.sysStructure, architecture: s.sysArchitecture, mep: s.sysMep, site: s.sysSite, other: s.sysOther }),
+    () => ({
+      structure: s.sysStructure,
+      architecture: s.sysArchitecture,
+      electrical: s.sysElectrical,
+      plumbing: s.sysPlumbing,
+      hvac: s.sysHvac,
+      process: s.sysProcess,
+      fire: s.sysFire,
+      site: s.sysSite,
+      other: s.sysOther,
+    }),
     [s]
   );
 
@@ -181,6 +207,14 @@ export default function ShowcaseViewer({
       engine.load(`/api/model/${version.id}`);
     });
 
+    fetchSavedTour(projectId, accessToken)
+      .then((stops) => {
+        if (!active) return;
+        setSavedStops(stops);
+        setEditorStops(stops);
+      })
+      .catch(() => {});
+
     fetch('/api/ai')
       .then((r) => r.json())
       .then((j) => setAiConfig({ configured: Boolean(j.configured), model: j.model ?? null }))
@@ -213,13 +247,15 @@ export default function ShowcaseViewer({
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine || elements.length === 0) return;
-    const stops = buildAutoTour(elements, engine.bounds, tourStrings);
-    setTourStops(stops);
+    setAutoStops(buildAutoTour(elements, engine.bounds, tourStrings));
     setTourAi('idle');
-    engine.setMinimapMarkers(
-      stops.map((st, i) => ({ x: st.pose.target[0], z: st.pose.target[2], label: String(i + 1) }))
-    );
   }, [elements, tourStrings]);
+
+  useEffect(() => {
+    engineRef.current?.setMinimapMarkers(
+      tourStops.map((st, i) => ({ x: st.pose.target[0], z: st.pose.target[2], label: String(i + 1) }))
+    );
+  }, [tourStops]);
 
   // Label elemen terpilih mengikuti objek tiap frame (DOM langsung, tanpa
   // setState) — lihat catatan teknis #7 di CATATAN.md.
@@ -285,7 +321,7 @@ export default function ShowcaseViewer({
     let best: TourStop | null = null;
     let bd = Infinity;
     for (const st of tourStops) {
-      if (st.id === 'overview' || st.id === 'plan') continue;
+      if (st.id === 'overview' || st.plan) continue;
       const t = st.pose.target;
       const d = Math.hypot(t[0] - stats.position[0], t[2] - stats.position[2]);
       if (d < bd) {
@@ -350,8 +386,11 @@ export default function ShowcaseViewer({
         engine.clearHighlight();
         setHighlightCount(0);
       }
-      if (stop.id === 'plan') {
-        engine.plan(1.6);
+      if (stop.plan) {
+        if (stop.custom) engine.goTo(stop.pose, 'orbit', 1.6);
+        else engine.plan(1.6);
+        engine.planActive = true;
+        engine.controls.enableRotate = false;
         setPlanActive(true);
       } else {
         engine.goTo(stop.pose, stop.mode, 1.6);
@@ -400,8 +439,11 @@ export default function ShowcaseViewer({
       if (id.startsWith('stop:')) {
         const st = tourStops[Number(id.slice(5))];
         if (!st) return;
-        if (st.id === 'plan') {
-          engine.plan();
+        if (st.plan) {
+          if (st.custom) engine.goTo(st.pose, 'orbit');
+          else engine.plan();
+          engine.planActive = true;
+          engine.controls.enableRotate = false;
           setPlanActive(true);
         } else engine.goTo(st.pose, st.mode);
         return;
@@ -560,18 +602,63 @@ export default function ShowcaseViewer({
       const j = (await res.json()) as { stops?: { id: string; title?: string; description?: string }[]; error?: string };
       if (!res.ok || !j.stops) throw new Error(j.error ?? `${res.status}`);
       const byId = new Map(j.stops.map((x) => [x.id, x]));
-      setTourStops((cur) =>
+      const apply = (cur: TourStop[]) =>
         cur.map((st) => {
           const n = byId.get(st.id);
           return n ? { ...st, title: n.title?.trim() || st.title, description: n.description?.trim() || st.description } : st;
-        })
-      );
+        });
+      if (editorStops.length > 0) setEditorStops(apply); // jadi draft -> bisa disimpan
+      else setAutoStops(apply);
       setTourAi('done');
     } catch (err) {
       setTourAi('error');
       showToast(tpl(s.aiError, { msg: err instanceof Error ? err.message : String(err) }));
     }
-  }, [tourAi, tourStops, projectId, accessToken, getContext, showToast, s]);
+  }, [tourAi, tourStops, editorStops.length, projectId, accessToken, getContext, showToast, s]);
+
+  // ---------------------------------------------------------------- editor tur (admin)
+  // Tangkap pose kamera + sorotan yang sedang aktif jadi satu pemberhentian.
+  const captureStop = useCallback(
+    (title: string, description: string, id?: string): TourStop | null => {
+      const engine = engineRef.current;
+      if (!engine) return null;
+      const stop: TourStop = {
+        id: id ?? `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title,
+        description,
+        mode: engine.mode,
+        plan: engine.planActive,
+        pose: engine.currentPose(),
+        custom: true,
+      };
+      if (highlightDisc) {
+        stop.highlightCategories = Array.from(new Set(elements.filter((e) => e.discipline === highlightDisc).map((e) => e.category)));
+      } else {
+        const gids = engine.highlightedGids();
+        if (engine.selected && !gids.includes(engine.selected)) gids.push(engine.selected);
+        if (gids.length) stop.highlightGids = gids.slice(0, 3000);
+      }
+      return stop;
+    },
+    [elements, highlightDisc]
+  );
+
+  const persistTour = useCallback(async () => {
+    if (tourSaving) return;
+    setTourSaving(true);
+    setTourNotice(null);
+    try {
+      await saveTour(projectId, accessToken, editorStops);
+      setSavedStops(editorStops);
+      setTourNotice(s.tourSaved);
+      window.setTimeout(() => setTourNotice(null), 3000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTourNotice(tpl(s.tourSaveError, { msg }));
+    } finally {
+      setTourSaving(false);
+    }
+  }, [tourSaving, projectId, accessToken, editorStops, s]);
 
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -779,6 +866,12 @@ export default function ShowcaseViewer({
               {Icons.spark}
               {s.assistant}
             </button>
+            {canEdit && (
+              <button type="button" className={`sc-pill ${side === 'tour' ? 'is-on' : ''}`} onClick={() => setSide(side === 'tour' ? 'none' : 'tour')} title={s.tourEditTitle}>
+                {Icons.camera}
+                {s.tourEdit}
+              </button>
+            )}
             {sheetCount > 0 && onOpenSheets && (
               <button type="button" className="sc-pill" onClick={onOpenSheets}>
                 {Icons.sheet}
@@ -859,6 +952,47 @@ export default function ShowcaseViewer({
           onClear={chat.clear}
           onClose={() => setSide(selected ? 'inspect' : 'none')}
           draft={aiDraft}
+        />
+      )}
+      {side === 'tour' && canEdit && (
+        <TourEditor
+          strings={s}
+          stops={editorStops}
+          dirty={tourDirty}
+          saving={tourSaving}
+          savedNotice={tourNotice}
+          highlightCount={highlightCount + (selectedGid ? 1 : 0)}
+          onCaptureCurrent={(title, description) => {
+            const st = captureStop(title, description);
+            if (st) setEditorStops((cur) => [...cur, st]);
+          }}
+          onUpdatePose={(i) => {
+            setEditorStops((cur) => {
+              const st = captureStop(cur[i].title, cur[i].description, cur[i].id);
+              return st ? cur.map((x, k) => (k === i ? st : x)) : cur;
+            });
+          }}
+          onChange={setEditorStops}
+          onGoto={(i) => {
+            const st = editorStops[i];
+            const engine = engineRef.current;
+            if (!st || !engine) return;
+            if (st.highlightCategories?.length) {
+              const cats = new Set(st.highlightCategories);
+              engine.setHighlight(elements.filter((e) => cats.has(e.category)).map((e) => e.gid));
+            } else engine.setHighlight(st.highlightGids ?? []);
+            setHighlightCount(engine.highlightCount);
+            setHighlightDisc(null);
+            engine.goTo(st.pose, st.mode);
+            if (st.plan) {
+              engine.planActive = true;
+              engine.controls.enableRotate = false;
+            }
+            setPlanActive(Boolean(st.plan));
+          }}
+          onSeedAuto={() => setEditorStops(autoStops.map((st, i) => ({ ...st, id: `custom-seed-${Date.now()}-${i}`, custom: true, autoRotate: false })))}
+          onSave={persistTour}
+          onClose={() => setSide('none')}
         />
       )}
       {side === 'help' && (

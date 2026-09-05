@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { resolveModelIdentity } from '@/lib/modelIdentity.mjs';
 import { disciplineOf, humanizeCategory, humanizeName, type Discipline } from './disciplines';
 import type { ElementNames } from './elementNames';
@@ -13,9 +14,23 @@ import type { CameraPose, ElementInfo, ViewMode } from './types';
 // lembut, mode ORBIT dan mode JALAN (eye level 1,7 m, WASD, seret untuk
 // menoleh), label elemen, minimap, tur kamera beranimasi.
 //
+// PERFORMA — ini yang membedakan dari viewer teknis:
+//  * Seluruh model DIGABUNG jadi dua mesh saja (padat & tembus pandang) saat
+//    dimuat. Model Revit besar punya puluhan ribu elemen; kalau tiap elemen
+//    jadi mesh sendiri, tiap frame = puluhan ribu draw call dan navigasi
+//    tersendat apa pun GPU-nya. Setelah digabung: 2 draw call.
+//  * Warna per-VERTEX: sorotan/seleksi/gaya tidak mengganti material, cukup
+//    menulis ulang warna pada rentang vertex milik elemen itu.
+//  * Raycast (klik, hover, crosshair) memakai BVH (three-mesh-bvh) di atas
+//    geometri gabungan — logaritmik, bukan menguji jutaan segitiga.
+//  * Shadow map STATIS: lampu & model tidak bergerak, jadi bayangan dirender
+//    sekali (autoUpdate=false), bukan tiap frame.
+//
 // Sengaja TIDAK memakai React di sini: semua yang berjalan tiap frame (label,
 // minimap, tween kamera) dikerjakan langsung ke DOM/canvas supaya React tidak
 // re-render 60×/detik. React (ShowcaseViewer.tsx) cukup mendengarkan event.
+
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 export type Style = 'mono' | 'original';
 
@@ -47,27 +62,63 @@ type Events = {
 const DEFAULT_CATEGORY = 'Default';
 const NON_PHYSICAL = new Set(['IFCSPACE', 'IFCOPENINGELEMENT', 'IFCANNOTATION', 'IFCGRID', 'IFCGRIDAXIS', 'IFCSITE']);
 const SHEER_OPACITY = 0.35;
-const MAX_SHADOW_MESHES = 15000;
 const LABEL_MAX = 14;
 const LABEL_CANDIDATES = 90;
 const MINIMAP_RECTS = 900;
+// Di bawah ini, perubahan warna di-upload per rentang; di atasnya seluruh
+// buffer sekaligus (lebih murah daripada ribuan rentang kecil).
+const PARTIAL_UPLOAD_MAX = 300;
 
 const COLORS = {
   mono: 0xd8dcdf,
   monoGlass: 0xc2d3de,
   highlight: 0x9fdc46,
-  highlightEmissive: 0x2f5a0c,
-  selected: 0xc9f55e,
-  selectedEmissive: 0x4f7f10,
+  selected: 0xd6ff5a,
   ground: 0xe7eaed,
   grid1: 0xbcc5cc,
   grid2: 0xd2d8dd,
   fog: 0xdfe5ea,
 };
+const MONO_GLASS_ALPHA = 0.32;
+const HIGHLIGHT_GLASS_ALPHA = 0.6;
+
+// Bagian geometri gabungan: 0 = padat, 1 = tembus pandang / non-fisik.
+type PartIndex = 0 | 1;
+
+interface VertexRange {
+  part: PartIndex;
+  vStart: number; // indeks vertex awal
+  vCount: number;
+  tStart: number; // indeks segitiga awal
+  tCount: number;
+}
 
 interface ElementRecord extends ElementInfo {
-  meshes: THREE.Mesh[];
+  ranges: VertexRange[];
   hasRealName: boolean;
+  sheer: boolean;
+}
+
+interface MergedPart {
+  mesh: THREE.Mesh;
+  geometry: THREE.BufferGeometry;
+  color: THREE.BufferAttribute; // RGBA per vertex (live)
+  baseMono: Float32Array;
+  baseOriginal: Float32Array;
+  // Peta segitiga -> gid, urut tStart, untuk hasil raycast.
+  tri: { tStart: number; tEnd: number; gid: string }[];
+  bvhReady: boolean;
+}
+
+// Rentang mentah yang dikumpulkan saat traversal, sebelum disalin ke buffer.
+interface Chunk {
+  gid: string;
+  part: PartIndex;
+  geometry: THREE.BufferGeometry;
+  matrix: THREE.Matrix4;
+  indexStart: number;
+  indexCount: number;
+  color: [number, number, number, number]; // warna asli material (linear) + alpha
 }
 
 function easeInOut(t: number) {
@@ -91,43 +142,27 @@ export class ShowcaseEngine {
   planActive = false;
 
   private records = new Map<string, ElementRecord>();
-  private root: THREE.Object3D | null = null;
-  private originalMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
-  private sheerMesh = new Set<THREE.Mesh>();
+  private parts: (MergedPart | null)[] = [null, null];
+  private modelGroup: THREE.Group | null = null;
+  // Data mentah dari GLB disimpan sampai nama dari DB datang (rebuildIndex),
+  // lalu dibuang.
+  private sourceRoot: THREE.Object3D | null = null;
+  private sourceParser: { associations: Map<unknown, unknown>; json: unknown } | null = null;
   private names: ElementNames | null = null;
   private highlighted = new Set<string>();
   private selectedGid: string | null = null;
   private listeners = new Map<keyof Events, Set<(p: never) => void>>();
   private disposed = false;
 
-  private matMono = new THREE.MeshStandardMaterial({ color: COLORS.mono, roughness: 0.92, metalness: 0.02 });
-  private matMonoGlass = new THREE.MeshStandardMaterial({
-    color: COLORS.monoGlass,
+  private matOpaque = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.02 });
+  private matSheer = new THREE.MeshStandardMaterial({
+    vertexColors: true,
     roughness: 0.4,
     transparent: true,
-    opacity: 0.32,
     depthWrite: false,
   });
-  private matHighlight = new THREE.MeshStandardMaterial({
-    color: COLORS.highlight,
-    emissive: COLORS.highlightEmissive,
-    emissiveIntensity: 0.35,
-    roughness: 0.7,
-  });
-  private matHighlightGlass = new THREE.MeshStandardMaterial({
-    color: COLORS.highlight,
-    emissive: COLORS.highlightEmissive,
-    emissiveIntensity: 0.3,
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-  });
-  private matSelected = new THREE.MeshStandardMaterial({
-    color: COLORS.selected,
-    emissive: COLORS.selectedEmissive,
-    emissiveIntensity: 0.45,
-    roughness: 0.6,
-  });
+  private colHighlight = new THREE.Color(COLORS.highlight);
+  private colSelected = new THREE.Color(COLORS.selected);
 
   private ground: THREE.Mesh | null = null;
   private grid: THREE.GridHelper | null = null;
@@ -164,11 +199,14 @@ export class ShowcaseEngine {
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
     this.camera.position.set(30, 20, 30);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+    // Pixel ratio dibatasi 1,5: di layar 4K/retina, DPR 2–3 berarti 4–9× piksel
+    // yang harus di-shading — tidak sepadan untuk presentasi.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false; // statis — lihat catatan di atas
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.domElement.style.display = 'block';
@@ -198,12 +236,13 @@ export class ShowcaseEngine {
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(2048, 2048);
     this.keyLight.shadow.bias = -0.0008;
-    this.keyLight.shadow.normalBias = 0.02;
+    this.keyLight.shadow.normalBias = 0.03;
     const fill = new THREE.DirectionalLight(0xdde8f0, 0.5);
     fill.position.set(-50, 30, -40);
     this.scene.add(hemi, ambient, this.keyLight, this.keyLight.target, fill);
     this.scene.fog = new THREE.Fog(COLORS.fog, 400, 1500);
 
+    this.raycaster.firstHitOnly = true;
     this.bindInput();
     this.loop();
   }
@@ -247,14 +286,7 @@ export class ShowcaseEngine {
   }
 
   private installModel(root: THREE.Object3D, parser: { associations: Map<unknown, unknown>; json: unknown }) {
-    if (this.root) {
-      this.scene.remove(this.root);
-      this.originalMaterials.clear();
-      this.sheerMesh.clear();
-    }
-    this.records.clear();
-    this.highlighted.clear();
-    this.selectedGid = null;
+    this.clearModel();
 
     // Center model ke origin (model IFC sering berkoordinat jauh dari 0).
     root.updateMatrixWorld(true);
@@ -267,28 +299,13 @@ export class ShowcaseEngine {
     this.bounds = { min: [-half.x, -half.y, -half.z], max: [half.x, half.y, half.z] };
     this.groundY = -half.y;
 
-    let meshCount = 0;
-    root.traverse((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      meshCount++;
-      const identity = resolveModelIdentity(child, root, parser as never);
-      const gid = identity?.globalId ?? `unmapped:${child.uuid}`;
-      child.userData.globalId = gid;
-      if (identity) child.userData.identity = identity;
-      this.originalMaterials.set(child, child.material);
-      if (this.isSheer(child.material)) this.sheerMesh.add(child);
-      child.castShadow = true;
-      child.receiveShadow = true;
-      child.frustumCulled = true;
-    });
-    this.scene.add(root);
-    this.root = root;
+    this.sourceRoot = root;
+    this.sourceParser = parser;
+    this.rebuildFromSource();
 
     this.buildGround();
     this.fitLights();
-    this.setShadows(this.shadowsWanted && meshCount <= MAX_SHADOW_MESHES);
-    this.rebuildIndex();
-    this.applyMaterials();
+    this.setShadows(this.shadowsWanted);
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     this.camera.near = Math.max(maxDim / 2000, 0.05);
@@ -308,13 +325,29 @@ export class ShowcaseEngine {
 
   applyNames(names: ElementNames) {
     this.names = names;
-    if (this.root) {
-      this.rebuildIndex();
-      this.applyMaterials();
-    }
+    // Nama & kategori mempengaruhi pembagian padat/tembus (kategori non-fisik)
+    // dan warna, jadi geometri disusun ulang dari sumber kalau masih ada.
+    if (this.sourceRoot) this.rebuildFromSource();
+    else this.refreshIdentities();
   }
 
-  private isSheer(mat: THREE.Material | THREE.Material[]): boolean {
+  private clearModel() {
+    if (this.modelGroup) {
+      this.scene.remove(this.modelGroup);
+      for (const p of this.parts) {
+        if (!p) continue;
+        p.geometry.dispose();
+      }
+    }
+    this.parts = [null, null];
+    this.modelGroup = null;
+    this.records.clear();
+    this.highlighted.clear();
+    this.selectedGid = null;
+    this.hoverGid = null;
+  }
+
+  private isSheerMaterial(mat: THREE.Material | THREE.Material[]): boolean {
     const mats = Array.isArray(mat) ? mat : [mat];
     return mats.every((m) => {
       const mm = m as THREE.Material & { opacity?: number };
@@ -337,48 +370,232 @@ export class ShowcaseEngine {
     return { name, category };
   }
 
-  private rebuildIndex() {
-    const root = this.root;
-    if (!root) return;
+  private makeRecord(gid: string, name: string | null, category: string | null): ElementRecord {
+    const cat = category || DEFAULT_CATEGORY;
+    const label = humanizeCategory(cat);
+    const clean = humanizeName(name);
+    return {
+      gid,
+      name: clean ?? (gid.startsWith('unmapped:') ? label : `${label} · ${gid.slice(0, 6)}`),
+      rawName: name,
+      category: cat,
+      categoryLabel: label,
+      discipline: disciplineOf(cat) as Discipline,
+      min: [Infinity, Infinity, Infinity],
+      max: [-Infinity, -Infinity, -Infinity],
+      center: [0, 0, 0],
+      size: [0, 0, 0],
+      radius: 0,
+      meshCount: 0,
+      ranges: [],
+      hasRealName: Boolean(clean),
+      sheer: false,
+    };
+  }
+
+  // Susun geometri gabungan dari GLB sumber. Dipanggil saat model dimuat dan
+  // sekali lagi saat nama/kategori dari DB datang.
+  private rebuildFromSource() {
+    const root = this.sourceRoot;
+    const parser = this.sourceParser;
+    if (!root || !parser) return;
+    const prevHighlight = new Set(this.highlighted);
+    const prevSelected = this.selectedGid;
+
+    if (this.modelGroup) {
+      this.scene.remove(this.modelGroup);
+      this.parts.forEach((p) => p?.geometry.dispose());
+    }
+    this.parts = [null, null];
     this.records.clear();
-    const tmp = new THREE.Box3();
+
+    const chunks: Chunk[] = [];
+    const counts = [
+      { v: 0, i: 0 },
+      { v: 0, i: 0 },
+    ];
+    const tmpBox = new THREE.Box3();
+    const white = new THREE.Color(0xffffff);
+
     root.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
-      const gid = child.userData.globalId as string;
-      tmp.setFromObject(child);
-      if (tmp.isEmpty()) return;
+      if ((child as THREE.InstancedMesh).isInstancedMesh) return; // jarang; identitasnya pun tidak ada
+      const geometry = child.geometry as THREE.BufferGeometry;
+      const pos = geometry.getAttribute('position');
+      if (!pos) return;
+      if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
+
+      let gid = child.userData.globalId as string | undefined;
+      if (!gid) {
+        const identity = resolveModelIdentity(child, root, parser as never);
+        gid = identity?.globalId ?? `unmapped:${child.uuid}`;
+        child.userData.globalId = gid;
+        if (identity) child.userData.identity = identity;
+      }
       let rec = this.records.get(gid);
       if (!rec) {
         const { name, category } = this.identityFor(child, gid);
-        const cat = category || DEFAULT_CATEGORY;
-        const label = humanizeCategory(cat);
-        const clean = humanizeName(name);
-        rec = {
-          gid,
-          name: clean ?? (gid.startsWith('unmapped:') ? label : `${label} · ${gid.slice(0, 6)}`),
-          rawName: name,
-          category: cat,
-          categoryLabel: label,
-          discipline: disciplineOf(cat) as Discipline,
-          min: [tmp.min.x, tmp.min.y, tmp.min.z],
-          max: [tmp.max.x, tmp.max.y, tmp.max.z],
-          center: [0, 0, 0],
-          size: [0, 0, 0],
-          radius: 0,
-          meshCount: 0,
-          meshes: [],
-          hasRealName: Boolean(clean),
-        };
+        rec = this.makeRecord(gid, name, category);
+        rec.sheer = this.isSheerMaterial(child.material) || NON_PHYSICAL.has(rec.category.toUpperCase());
         this.records.set(gid, rec);
-      } else {
-        rec.min = [Math.min(rec.min[0], tmp.min.x), Math.min(rec.min[1], tmp.min.y), Math.min(rec.min[2], tmp.min.z)];
-        rec.max = [Math.max(rec.max[0], tmp.max.x), Math.max(rec.max[1], tmp.max.y), Math.max(rec.max[2], tmp.max.z)];
       }
-      rec.meshes.push(child);
       rec.meshCount++;
+      tmpBox.setFromObject(child);
+      if (!tmpBox.isEmpty()) {
+        rec.min = [Math.min(rec.min[0], tmpBox.min.x), Math.min(rec.min[1], tmpBox.min.y), Math.min(rec.min[2], tmpBox.min.z)];
+        rec.max = [Math.max(rec.max[0], tmpBox.max.x), Math.max(rec.max[1], tmpBox.max.y), Math.max(rec.max[2], tmpBox.max.z)];
+      }
+
+      const part: PartIndex = rec.sheer ? 1 : 0;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      const indexCountTotal = geometry.index ? geometry.index.count : pos.count;
+      const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: indexCountTotal, materialIndex: 0 }];
+      for (const g of groups) {
+        const count = g.count === Infinity ? indexCountTotal - g.start : Math.min(g.count, indexCountTotal - g.start);
+        if (count <= 0) continue;
+        const m = (mats[g.materialIndex ?? 0] ?? mats[0]) as THREE.MeshStandardMaterial & { map?: THREE.Texture | null };
+        const c = m?.color ?? white;
+        // Tekstur tidak ikut (warna per-vertex saja); material bertekstur
+        // biasanya berwarna putih -> diredam sedikit supaya tidak menyilaukan.
+        const tint = m?.map ? 0.8 : 1;
+        const alpha = part === 1 ? THREE.MathUtils.clamp((m?.transparent ? m.opacity : 1) || 0.3, 0.12, 0.6) : 1;
+        chunks.push({
+          gid,
+          part,
+          geometry,
+          matrix: child.matrixWorld.clone(),
+          indexStart: g.start,
+          indexCount: count,
+          color: [c.r * tint, c.g * tint, c.b * tint, alpha],
+        });
+        counts[part].v += pos.count;
+        counts[part].i += count;
+      }
     });
+
+    const group = new THREE.Group();
+    const monoOpaque = new THREE.Color(COLORS.mono);
+    const monoGlass = new THREE.Color(COLORS.monoGlass);
+    const normalMatrix = new THREE.Matrix3();
+    const v = new THREE.Vector3();
+
+    for (const part of [0, 1] as PartIndex[]) {
+      const total = counts[part];
+      if (total.v === 0) continue;
+      const position = new Float32Array(total.v * 3);
+      const normal = new Float32Array(total.v * 3);
+      const baseMono = new Float32Array(total.v * 4);
+      const baseOriginal = new Float32Array(total.v * 4);
+      const index = new Uint32Array(total.i);
+      const tri: MergedPart['tri'] = [];
+      let vOff = 0;
+      let iOff = 0;
+      const mono = part === 0 ? monoOpaque : monoGlass;
+      const monoA = part === 0 ? 1 : MONO_GLASS_ALPHA;
+
+      for (const ch of chunks) {
+        if (ch.part !== part) continue;
+        const pos = ch.geometry.getAttribute('position');
+        const nor = ch.geometry.getAttribute('normal');
+        const n = pos.count;
+        normalMatrix.getNormalMatrix(ch.matrix);
+        for (let k = 0; k < n; k++) {
+          v.fromBufferAttribute(pos, k).applyMatrix4(ch.matrix);
+          position[(vOff + k) * 3] = v.x;
+          position[(vOff + k) * 3 + 1] = v.y;
+          position[(vOff + k) * 3 + 2] = v.z;
+          v.fromBufferAttribute(nor, k).applyMatrix3(normalMatrix).normalize();
+          normal[(vOff + k) * 3] = v.x;
+          normal[(vOff + k) * 3 + 1] = v.y;
+          normal[(vOff + k) * 3 + 2] = v.z;
+          const o = (vOff + k) * 4;
+          baseMono[o] = mono.r;
+          baseMono[o + 1] = mono.g;
+          baseMono[o + 2] = mono.b;
+          baseMono[o + 3] = monoA;
+          baseOriginal[o] = ch.color[0];
+          baseOriginal[o + 1] = ch.color[1];
+          baseOriginal[o + 2] = ch.color[2];
+          baseOriginal[o + 3] = ch.color[3];
+        }
+        const src = ch.geometry.index;
+        if (src) {
+          for (let k = 0; k < ch.indexCount; k++) index[iOff + k] = src.getX(ch.indexStart + k) + vOff;
+        } else {
+          for (let k = 0; k < ch.indexCount; k++) index[iOff + k] = ch.indexStart + k + vOff;
+        }
+        const rec = this.records.get(ch.gid)!;
+        const range: VertexRange = { part, vStart: vOff, vCount: n, tStart: iOff / 3, tCount: ch.indexCount / 3 };
+        rec.ranges.push(range);
+        const last = tri[tri.length - 1];
+        if (last && last.gid === ch.gid && last.tEnd === range.tStart) last.tEnd += range.tCount;
+        else tri.push({ tStart: range.tStart, tEnd: range.tStart + range.tCount, gid: ch.gid });
+        vOff += n;
+        iOff += ch.indexCount;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+      geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+      const color = new THREE.BufferAttribute(new Float32Array(total.v * 4), 4);
+      color.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute('color', color);
+      geometry.setIndex(new THREE.BufferAttribute(index, 1));
+      geometry.computeBoundingSphere();
+      geometry.computeBoundingBox();
+
+      const mesh = new THREE.Mesh(geometry, part === 0 ? this.matOpaque : this.matSheer);
+      mesh.castShadow = part === 0;
+      mesh.receiveShadow = part === 0;
+      mesh.frustumCulled = false; // satu mesh raksasa; culling per-mesh tidak berguna
+      mesh.renderOrder = part;
+      group.add(mesh);
+      this.parts[part] = { mesh, geometry, color, baseMono, baseOriginal, tri, bvhReady: false };
+    }
+
+    this.scene.add(group);
+    this.modelGroup = group;
+
+    // Geometri sumber sudah disalin — buang supaya memori tidak dobel. Sumber
+    // dipertahankan hanya sampai nama dari DB datang (rebuild sekali lagi).
+    if (this.names) {
+      root.traverse((child) => {
+        if (child instanceof THREE.Mesh) child.geometry.dispose();
+      });
+      this.sourceRoot = null;
+      this.sourceParser = null;
+    }
+
+    this.finishIndex();
+    this.highlighted = new Set([...prevHighlight].filter((g) => this.records.has(g)));
+    this.selectedGid = prevSelected && this.records.has(prevSelected) ? prevSelected : null;
+    this.repaintAll();
+    this.renderer.shadowMap.needsUpdate = true;
+    this.scheduleBvh();
+  }
+
+  // Hanya perbarui nama/kategori (tanpa menyusun ulang geometri) — dipakai
+  // kalau sumber GLB sudah dibuang.
+  private refreshIdentities() {
+    // Tanpa mesh sumber tidak ada userData.identity; cukup pakai DB.
+    const db = this.names;
+    if (!db) return;
+    this.records.forEach((rec, gid) => {
+      const name = db.nameByGid.get(gid) ?? rec.rawName;
+      const category = db.categoryByGid.get(gid) ?? (rec.category === DEFAULT_CATEGORY ? null : rec.category);
+      const fresh = this.makeRecord(gid, name, category);
+      Object.assign(rec, { name: fresh.name, rawName: fresh.rawName, category: fresh.category, categoryLabel: fresh.categoryLabel, discipline: fresh.discipline, hasRealName: fresh.hasRealName });
+    });
+    this.finishIndex();
+  }
+
+  private finishIndex() {
     const list: ElementInfo[] = [];
     this.records.forEach((r) => {
+      if (!Number.isFinite(r.min[0])) {
+        r.min = [0, 0, 0];
+        r.max = [0, 0, 0];
+      }
       r.size = [r.max[0] - r.min[0], r.max[1] - r.min[1], r.max[2] - r.min[2]];
       r.center = [(r.min[0] + r.max[0]) / 2, (r.min[1] + r.max[1]) / 2, (r.min[2] + r.max[2]) / 2];
       r.radius = Math.hypot(r.size[0], r.size[1], r.size[2]) / 2;
@@ -387,6 +604,24 @@ export class ShowcaseEngine {
     this.elements = list;
     this.buildLabelCandidates();
     this.buildMinimapRects();
+  }
+
+  // BVH dibangun setelah frame pertama tampil supaya layar tidak "beku" saat
+  // model besar baru muncul. Sebelum siap, klik/hover diabaikan.
+  private scheduleBvh() {
+    const targets = this.parts.filter((p): p is MergedPart => Boolean(p));
+    let i = 0;
+    const next = () => {
+      if (this.disposed) return;
+      const p = targets[i++];
+      if (!p) return;
+      if (!this.parts.includes(p)) return next(); // sudah diganti model baru
+      const bvh = new MeshBVH(p.geometry, { maxLeafTris: 8 });
+      (p.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVH }).boundsTree = bvh;
+      p.bvhReady = true;
+      setTimeout(next, 0);
+    };
+    setTimeout(next, 50);
   }
 
   getElement(gid: string): ElementInfo | undefined {
@@ -437,6 +672,7 @@ export class ShowcaseEngine {
     cam.near = 0.1;
     cam.far = r * 5;
     cam.updateProjectionMatrix();
+    this.renderer.shadowMap.needsUpdate = true;
   }
 
   setShadows(on: boolean) {
@@ -444,52 +680,103 @@ export class ShowcaseEngine {
     this.renderer.shadowMap.enabled = on;
     this.keyLight.castShadow = on;
     // Material perlu dikompilasi ulang agar perubahan shadowMap terasa.
-    this.scene.traverse((o) => {
-      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
-      if (!m) return;
-      (Array.isArray(m) ? m : [m]).forEach((mm) => (mm.needsUpdate = true));
+    [this.matOpaque, this.matSheer, this.ground?.material].forEach((m) => {
+      if (m) (m as THREE.Material).needsUpdate = true;
     });
+    this.renderer.shadowMap.needsUpdate = true;
   }
   get shadowsOn() {
     return this.renderer.shadowMap.enabled;
   }
 
-  // ------------------------------------------------------------------ materials
+  // ------------------------------------------------------------------ colors
   setStyle(style: Style) {
     this.style = style;
     // ACES membuat tampilan monokrom lembut, tapi menggelapkan warna material
     // asli dari Revit — untuk "warna asli" pakai tone mapping linear supaya
     // hasilnya mirip viewer teknis. Ganti tone mapping = shader dikompilasi
-    // ulang, jadi semua material ditandai needsUpdate.
+    // ulang, jadi material ditandai needsUpdate.
     const tm = style === 'mono' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
     if (this.renderer.toneMapping !== tm) {
       this.renderer.toneMapping = tm;
       this.renderer.toneMappingExposure = style === 'mono' ? 1.0 : 1.1;
-      this.originalMaterials.forEach((mat) => (Array.isArray(mat) ? mat : [mat]).forEach((mm) => (mm.needsUpdate = true)));
-      [this.matMono, this.matMonoGlass, this.matHighlight, this.matHighlightGlass, this.matSelected].forEach((m) => (m.needsUpdate = true));
+      [this.matOpaque, this.matSheer].forEach((m) => (m.needsUpdate = true));
     }
-    this.applyMaterials();
+    this.repaintAll();
   }
 
-  private applyMaterials() {
-    this.records.forEach((rec) => {
-      const isSel = rec.gid === this.selectedGid;
-      const isHi = this.highlighted.has(rec.gid);
-      for (const mesh of rec.meshes) {
-        const sheer = this.sheerMesh.has(mesh);
-        if (isSel) mesh.material = sheer ? this.matHighlightGlass : this.matSelected;
-        else if (isHi) mesh.material = sheer ? this.matHighlightGlass : this.matHighlight;
-        else if (this.style === 'mono') mesh.material = sheer ? this.matMonoGlass : this.matMono;
-        else mesh.material = this.originalMaterials.get(mesh) ?? mesh.material;
+  private colorFor(rec: ElementRecord, part: MergedPart, vertexIndex: number, out: Float32Array, o: number) {
+    const isSel = rec.gid === this.selectedGid;
+    const isHi = this.highlighted.has(rec.gid);
+    if (isSel || isHi) {
+      const c = isSel ? this.colSelected : this.colHighlight;
+      out[o] = c.r;
+      out[o + 1] = c.g;
+      out[o + 2] = c.b;
+      out[o + 3] = rec.sheer ? HIGHLIGHT_GLASS_ALPHA : 1;
+      return;
+    }
+    const base = this.style === 'mono' ? part.baseMono : part.baseOriginal;
+    const i = vertexIndex * 4;
+    out[o] = base[i];
+    out[o + 1] = base[i + 1];
+    out[o + 2] = base[i + 2];
+    out[o + 3] = base[i + 3];
+  }
+
+  private paintRecord(rec: ElementRecord) {
+    for (const r of rec.ranges) {
+      const part = this.parts[r.part];
+      if (!part) continue;
+      const arr = part.color.array as Float32Array;
+      for (let k = 0; k < r.vCount; k++) this.colorFor(rec, part, r.vStart + k, arr, (r.vStart + k) * 4);
+    }
+  }
+
+  private repaintAll() {
+    this.records.forEach((rec) => this.paintRecord(rec));
+    for (const p of this.parts) {
+      if (!p) continue;
+      p.color.clearUpdateRanges();
+      p.color.needsUpdate = true;
+    }
+  }
+
+  // Cat ulang hanya elemen tertentu; upload ke GPU per rentang kalau sedikit.
+  private repaint(gids: Iterable<string>) {
+    const list = Array.from(gids).map((g) => this.records.get(g)).filter((r): r is ElementRecord => Boolean(r));
+    if (list.length === 0) return;
+    if (list.length > PARTIAL_UPLOAD_MAX) {
+      list.forEach((rec) => this.paintRecord(rec));
+      for (const p of this.parts) {
+        if (!p) continue;
+        p.color.clearUpdateRanges();
+        p.color.needsUpdate = true;
       }
-    });
+      return;
+    }
+    const touched = new Set<MergedPart>();
+    for (const rec of list) {
+      this.paintRecord(rec);
+      for (const r of rec.ranges) {
+        const part = this.parts[r.part];
+        if (!part) continue;
+        part.color.addUpdateRange(r.vStart * 4, r.vCount * 4);
+        touched.add(part);
+      }
+    }
+    touched.forEach((p) => (p.color.needsUpdate = true));
   }
 
   select(gid: string | null) {
     if (gid && !this.records.has(gid)) gid = null;
     if (this.selectedGid === gid) return;
+    const prev = this.selectedGid;
     this.selectedGid = gid;
-    this.applyMaterials();
+    const changed: string[] = [];
+    if (prev) changed.push(prev);
+    if (gid) changed.push(gid);
+    this.repaint(changed);
     this.emit('select', gid);
   }
   get selected() {
@@ -497,22 +784,38 @@ export class ShowcaseEngine {
   }
 
   setHighlight(gids: Iterable<string>) {
-    this.highlighted = new Set(gids);
-    this.applyMaterials();
+    const next = new Set(gids);
+    const changed = new Set<string>();
+    this.highlighted.forEach((g) => {
+      if (!next.has(g)) changed.add(g);
+    });
+    next.forEach((g) => {
+      if (!this.highlighted.has(g)) changed.add(g);
+    });
+    this.highlighted = next;
+    this.repaint(changed);
   }
   addHighlight(gids: Iterable<string>) {
-    for (const g of gids) this.highlighted.add(g);
-    this.applyMaterials();
+    const added: string[] = [];
+    for (const g of gids) {
+      if (!this.highlighted.has(g)) {
+        this.highlighted.add(g);
+        added.push(g);
+      }
+    }
+    this.repaint(added);
   }
   clearHighlight() {
-    this.highlighted.clear();
-    this.applyMaterials();
+    this.setHighlight([]);
   }
   get highlightCount() {
     return this.highlighted.size;
   }
   isHighlighted(gid: string) {
     return this.highlighted.has(gid);
+  }
+  highlightedGids(): string[] {
+    return Array.from(this.highlighted);
   }
 
   // ------------------------------------------------------------------ camera
@@ -588,15 +891,14 @@ export class ShowcaseEngine {
           }
           // Turun ke eye level di posisi sekarang, arah pandang dipertahankan
           // (rata), supaya tidak disorientasi.
-          const p = this.camera.position;
           const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
           dir.y = 0;
           if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1);
           dir.normalize();
           const y = this.groundY + this.eyeOffset;
           return {
-            position: [p.x, y, p.z] as [number, number, number],
-            target: [p.x + dir.x * 10, y, p.z + dir.z * 10] as [number, number, number],
+            position: [p0.x, y, p0.z] as [number, number, number],
+            target: [p0.x + dir.x * 10, y, p0.z + dir.z * 10] as [number, number, number],
           };
         })();
       this.controls.enabled = false;
@@ -801,11 +1103,11 @@ export class ShowcaseEngine {
       }
       return;
     }
-    // Hover (orbit): elemen di bawah kursor. Di-throttle — raycast ke ribuan
-    // mesh tiap gerakan mouse terlalu mahal.
-    if (this.mode === 'orbit') {
+    // Hover (orbit): elemen di bawah kursor. Di-throttle; raycast-nya sendiri
+    // sudah murah berkat BVH.
+    if (this.mode === 'orbit' && !this.tween) {
       const now = performance.now();
-      if (now - this.lastHover < 90) return;
+      if (now - this.lastHover < 80) return;
       this.lastHover = now;
       const rect = this.container.getBoundingClientRect();
       if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
@@ -904,34 +1206,39 @@ export class ShowcaseEngine {
 
   // ------------------------------------------------------------------ picking
   private pickAt(clientX: number, clientY: number): string | null {
-    const root = this.root;
-    if (!root) return null;
     const rect = this.container.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     return this.pickNdc(ndc);
   }
 
+  // Padat diutamakan; objek tembus pandang / non-fisik hanya kalau tidak ada
+  // yang padat di jalur sinar.
   private pickNdc(ndc: THREE.Vector2): string | null {
-    const root = this.root;
-    if (!root) return null;
     this.raycaster.setFromCamera(ndc, this.camera);
     this.raycaster.near = this.camera.near;
-    const hits = this.raycaster.intersectObject(root, true);
-    let sheerHit: string | null = null;
-    for (const h of hits) {
-      const m = h.object as THREE.Mesh;
-      if (!m.visible) continue;
-      const gid = m.userData.globalId as string | undefined;
-      if (!gid) continue;
-      const rec = this.records.get(gid);
-      const nonPhysical = rec ? NON_PHYSICAL.has(rec.category.toUpperCase()) : false;
-      if (this.sheerMesh.has(m) || nonPhysical) {
-        if (!sheerHit) sheerHit = gid;
-        continue;
-      }
-      return gid;
+    for (const part of this.parts) {
+      if (!part || !part.bvhReady) continue;
+      const hits = this.raycaster.intersectObject(part.mesh, false);
+      const hit = hits[0];
+      if (!hit || hit.faceIndex === undefined || hit.faceIndex === null) continue;
+      const gid = this.gidForTriangle(part, hit.faceIndex);
+      if (gid) return gid;
     }
-    return sheerHit;
+    return null;
+  }
+
+  private gidForTriangle(part: MergedPart, tri: number): string | null {
+    const arr = part.tri;
+    let lo = 0;
+    let hi = arr.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const r = arr[mid];
+      if (tri < r.tStart) hi = mid - 1;
+      else if (tri >= r.tEnd) lo = mid + 1;
+      else return r.gid;
+    }
+    return null;
   }
 
   private setHover(gid: string | null, x: number, y: number) {
@@ -1167,8 +1474,7 @@ export class ShowcaseEngine {
     const dt = Math.min(dtRaw, 0.1);
     const now = performance.now();
     // Tween kamera memakai waktu nyata (bukan dt yang di-clamp) supaya durasi
-    // animasi tetap sama di mesin lambat — kalau tidak, di 5 FPS animasi 1,5 s
-    // molor jadi 3 s lebih.
+    // animasi tetap sama di mesin lambat.
     this.stepTween(Math.min(dtRaw, 0.5));
     this.stepKeys(dt);
     if (this.mode === 'orbit') this.controls.update();
@@ -1209,12 +1515,13 @@ export class ShowcaseEngine {
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('resize', this.onResize);
     this.controls.dispose();
-    this.scene.traverse((o) => {
+    this.clearModel();
+    this.sourceRoot?.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();
     });
-    this.originalMaterials.forEach((mat) => (Array.isArray(mat) ? mat : [mat]).forEach((mm) => mm.dispose()));
-    [this.matMono, this.matMonoGlass, this.matHighlight, this.matHighlightGlass, this.matSelected].forEach((m) => m.dispose());
+    this.ground?.geometry.dispose();
+    [this.matOpaque, this.matSheer].forEach((m) => m.dispose());
     this.renderer.dispose();
     el.remove();
     this.labelLayer.remove();

@@ -42,6 +42,10 @@ export interface TourStop {
   highlightCategories?: string[];
   highlightGids?: string[];
   autoRotate?: boolean;
+  // Tampak atas (denah): kamera lurus ke bawah, putaran dikunci.
+  plan?: boolean;
+  // Dibuat manual lewat editor tur (tersimpan di DB), bukan tur otomatis.
+  custom?: boolean;
 }
 
 // Aksi yang boleh diminta AI ke viewer. Diparse dari teks balasan.

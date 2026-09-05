@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { createServiceClient } from '@/lib/supabase';
+import { isAdminAuthed } from '@/lib/adminAuth';
 import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
 import PresentClient, { type ModelFileOption, type SheetItem } from '@/components/PresentClient';
 import VersionBadge from '@/components/VersionBadge';
@@ -20,7 +21,9 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
   const { projectId } = await params;
   const { t: token } = await searchParams;
 
-  const [strings, locale, theme] = await Promise.all([getStrings(), getLocale(), getTheme()]);
+  // canEdit: admin (cookie VIEWER_ADMIN_PASSWORD) boleh menyusun tur terpandu
+  // dari halaman presentasi. Tanpa password admin, semua terbuka (aturan lama).
+  const [strings, locale, theme, canEdit] = await Promise.all([getStrings(), getLocale(), getTheme(), isAdminAuthed()]);
   const supabase = createServiceClient();
 
   // Gate akses: token wajib cocok dengan projects.client_access_token.
@@ -113,6 +116,7 @@ export default async function PresentPage({ params, searchParams }: PresentPageP
         projectId={projectId}
         projectName={project.name as string}
         accessToken={token}
+        canEdit={canEdit}
         files={files}
         fallbackUrl={fallbackUrl}
         locale={locale}

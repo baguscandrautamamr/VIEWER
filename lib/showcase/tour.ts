@@ -139,6 +139,7 @@ export function buildAutoTour(
     description: s.planDesc,
     mode: 'orbit',
     pose: planPose(bounds),
+    plan: true,
   });
   return stops;
 }

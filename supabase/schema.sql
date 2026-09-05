@@ -132,3 +132,25 @@ alter table sheets add column if not exists camera_preset text;
 alter table sheets add column if not exists sort_order int default 0;
 -- Kontrol tampil/sembunyi sheet ke client (halaman Kelola). Aman berulang.
 alter table sheets add column if not exists is_visible boolean default true;
+
+-- ---------------------------------------------------------------------------
+-- Tur terpandu tersimpan (mode presentasi). Satu baris = satu pemberhentian.
+-- Kalau tabel kosong untuk sebuah project, viewer memakai tur otomatis.
+-- Ditulis lewat /api/tour (admin, service role); dibaca viewer lewat route yang
+-- sama dengan token client. Aman dijalankan berulang.
+-- ---------------------------------------------------------------------------
+create table if not exists tour_stops (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) on delete cascade,
+  sort_order int default 0,
+  title text not null,
+  description text default '',
+  mode text default 'orbit',          -- 'orbit' | 'walk' | 'plan'
+  pose jsonb not null,                -- {position:[x,y,z], target:[x,y,z]}
+  highlight jsonb default '{}',       -- {gids:[...]} dan/atau {categories:[...]}
+  created_at timestamptz default now()
+);
+alter table tour_stops enable row level security;
+do $$ begin
+  create policy "anon read tour_stops" on tour_stops for select to anon using (true);
+exception when duplicate_object then null; end $$;

@@ -208,3 +208,8 @@ body {
   .sc-status-r { display: none; }
   .sc-brand span:last-child { display: none; }
 }
+.sc-field { width: 100%; padding: 6px 9px; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 12px; outline: none; resize: none; }
+.sc-field:focus { border-color: rgba(201,245,94,0.5); }
+.sc-field::placeholder { color: rgba(255,255,255,0.35); }
+.sc-stop { padding: 7px 6px; border-radius: 7px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.sc-stop:hover { background: rgba(255,255,255,0.04); }

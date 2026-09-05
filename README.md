@@ -74,8 +74,9 @@ di tengah-atas viewer (pilihan diingat di browser):
 | Bagian | Fungsi |
 |---|---|
 | **Mode jalan / Mode orbit** (tengah atas) | Jalan kaki di eye level 1,7 m (**W/A/S/D**, Shift lari, **Q/E** turun/naik, seret untuk menoleh, roda mouse maju/mundur) atau orbit biasa |
-| **Jelajahi model** (panel kiri) | Cari elemen, label elemen, **sorot sistem** per disiplin (Struktur / Arsitektur / MEP / Tapak — dideteksi dari nama family), denah 2D/3D, titik pandang (pemberhentian tur + preset tinggi mata), gaya monokrom/warna asli, bayangan, putar otomatis, reset, kembali ke pintu masuk, simpan gambar PNG |
+| **Jelajahi model** (panel kiri) | Cari elemen, label elemen, **sorot sistem** per disiplin (Struktur / Arsitektur / Elektrikal & elektronik / Plumbing / HVAC / Proses / Pemadam kebakaran / Tapak — dideteksi dari kata kunci nama family, lihat `lib/showcase/disciplines.ts`), denah 2D/3D, titik pandang (pemberhentian tur + preset tinggi mata), gaya monokrom/warna asli, bayangan, putar otomatis, reset, kembali ke pintu masuk, simpan gambar PNG |
 | **Tur terpandu** (dock bawah) | Pemberhentian dibuat **otomatis** dari isi model: ikhtisar → tiap disiplin (disorot hijau) → jalan kaki → tampak atas. Kamera beranimasi antar pemberhentian. Tombol **Narasi AI** menulis ulang judul + narasi tiap pemberhentian |
+| **Susun tur** (dock bawah, hanya admin) | Simpan pandangan kamera saat ini (mode jalan/orbit/denah + sorotan aktif) sebagai pemberhentian, atur urutan, edit judul/narasi, lalu **Simpan tur** ke database (tabel `tour_stops`). Kalau ada tur tersimpan, itulah yang dipakai client; kalau kosong, tur otomatis. Tombol "Isi dari tur otomatis" menyalin tur otomatis sebagai titik awal |
 | **Navigator elemen** (dock bawah, atau `/`) | Cari nama/kategori/kata kunci, hasil dikelompokkan per kategori, klik → kamera terbang & elemen disorot |
 | **Inspeksi elemen** (panel kanan) | Muncul saat objek diklik (atau **E** di mode jalan pada objek di tengah layar): nama, kategori, GlobalId, dimensi & elevasi dari kotak batas, elemen sejenis & sekitar, **Jelaskan dengan AI**, ke elemen, sorot sejenis |
 | **Asisten AI** (dock bawah) | Obrolan tentang model. AI menerima ringkasan model (kategori, jumlah, contoh nama, elemen terpilih) dan bisa **menggerakkan viewer**: terbang ke elemen/kategori, menyorot, ganti mode jalan/orbit/denah, mulai tur, label |
@@ -84,6 +85,24 @@ di tengah-atas viewer (pilihan diingat di browser):
 
 Pintasan: **E** inspeksi · **F** fokus elemen terpilih · **T** tur · **L** label ·
 **R** reset · **/** cari · **Esc** tutup.
+
+### Kenapa mode presentasi tetap ringan di model besar
+
+Model Revit besar punya puluhan ribu elemen. Mode presentasi **menggabungkan
+seluruh geometri jadi dua mesh** (padat & tembus pandang) saat dimuat, jadi tiap
+frame cuma 2 draw call — bukan puluhan ribu. Sorotan/seleksi/gaya ditulis
+sebagai **warna per-vertex**, klik/hover memakai **BVH** (`three-mesh-bvh`), dan
+bayangan dirender sekali (shadow map statis). Detailnya di
+`lib/showcase/engine.ts` dan CATATAN.md (jebakan #35–#38).
+
+Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
+tidak terasa. Mode teknis tetap merender per elemen seperti semula.
+
+### Menyimpan tur terpandu
+
+Jalankan blok `tour_stops` di `supabase/schema.sql` (aman diulang). Buka link
+presentasi sebagai admin (cookie `VIEWER_ADMIN_PASSWORD`; kalau password tidak
+di-set, semua terbuka) → dock **Susun tur**.
 
 ### Cara kerja AI (dan keamanannya)
 

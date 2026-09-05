@@ -4,15 +4,65 @@
 // "M_Concrete-Rectangular-Column") atau tipe IFC mentah ("IFCWALL") kalau
 // nama family kosong. Keduanya dipetakan lewat kata kunci, bukan daftar
 // pasti, supaya tetap jalan untuk penamaan family yang beragam.
+//
+// MEP dipecah jadi lima sistem: elektrikal & elektronik, plumbing, HVAC,
+// proses, dan pemadam kebakaran. URUTAN aturan penting: aturan yang lebih
+// spesifik (pemadam, HVAC, proses) diuji lebih dulu, baru plumbing yang
+// menampung pipa/pompa/katup generik, lalu elektrikal. Kata "column" dan
+// "tower" sengaja tidak masuk aturan proses: di model gedung itu hampir selalu
+// kolom struktur / menara arsitektur.
 
-export type Discipline = 'structure' | 'architecture' | 'mep' | 'site' | 'other';
+export type Discipline =
+  | 'structure'
+  | 'architecture'
+  | 'electrical'
+  | 'plumbing'
+  | 'hvac'
+  | 'process'
+  | 'fire'
+  | 'site'
+  | 'other';
 
-export const DISCIPLINE_ORDER: Discipline[] = ['structure', 'architecture', 'mep', 'site', 'other'];
+export const DISCIPLINE_ORDER: Discipline[] = [
+  'structure',
+  'architecture',
+  'electrical',
+  'plumbing',
+  'hvac',
+  'process',
+  'fire',
+  'site',
+  'other',
+];
+
+// Disiplin yang termasuk rumpun MEP (dipakai untuk saran AI & ringkasan).
+export const MEP_DISCIPLINES: Discipline[] = ['electrical', 'plumbing', 'hvac', 'process', 'fire'];
 
 const RULES: Array<{ discipline: Discipline; keys: RegExp }> = [
   {
-    discipline: 'mep',
-    keys: /pipe|pipa|duct|ducting|cable|tray|conduit|sprinkler|hydrant|valve|katup|pump|pompa|flow|fitting|elbow|tee|hvac|ahu|fcu|diffuser|grille|sanitary|toilet|lavatory|urinal|wc|sink|shower|light|lamp|luminaire|lampu|outlet|socket|switch|panel|electrical|elektrik|mechanical|plumbing|mep|fire|tank|tangki|chiller|cooling|exhaust|fan|kipas|boiler|generator|genset|transformer|trafo|equipment|distribution|terminal|controller|segment|airterminal/i,
+    discipline: 'fire',
+    keys: /sprinkler|hydrant|hidran|fire|kebakaran|apar|extinguisher|smoke|asap|heat detector|detektor|alarm|fm[- ]?200|deluge|hose ?reel|foam|siamese|standpipe|riser/i,
+  },
+  {
+    discipline: 'hvac',
+    keys: /duct|ducting|hvac|ahu|fcu|diffuser|difuser|grille|register|damper|vav|chiller|cooling ?tower|exhaust|fan\b|kipas|blower|air ?terminal|air ?handling|ventil|refrigerant|condens|evaporat|split|cassette|thermostat|heating|boiler|air ?cond|\bac\b|louvre|louver|vrf|vrv|udara/i,
+  },
+  {
+    // Air bersih/kotor lebih dulu, supaya "water tank" tidak dianggap proses.
+    discipline: 'plumbing',
+    keys: /water ?tank|tangki ?air|roof ?tank|ground ?tank|\bgwt\b|\brwt\b|water ?heater|hot ?water|cold ?water|rain ?water|air ?bersih|air ?kotor|\bstp\b|\bwtp\b|greywater|blackwater/i,
+  },
+  {
+    discipline: 'process',
+    keys: /process|proses|vessel|reactor|reaktor|exchanger|penukar|distillation|destilasi|absorber|cooling ?column|compressor|kompresor|separator|silo|hopper|conveyor|konveyor|agitator|mixer|skid|pipeline|chemical|kimia|steam|uap|\bgas\b|\boil\b|minyak|fuel|bahan bakar|tank|tangki|drum|cyclone|filter press|burner|furnace|kiln|dryer|nozzle|flare|scrubber|absorber|stripper|turbine|turbin/i,
+  },
+  {
+    discipline: 'plumbing',
+    keys: /pipe|pipa|plumbing|sanitary|saniter|toilet|lavatory|urinal|closet|\bwc\b|sink|wastafel|shower|faucet|kran|keran|drain|drainase|sewer|sewage|septic|gutter|talang|water|\bair\b|pump|pompa|valve|katup|fitting|elbow|\btee\b|reducer|flange|strainer|grease ?trap|meter air|heater/i,
+  },
+  {
+    discipline: 'electrical',
+    keys: /cable|kabel|tray|conduit|light|lamp|luminaire|lampu|outlet|socket|stop ?kontak|switch|saklar|electrical|elektrik|listrik|electronic|elektronik|panel ?listrik|\bmdp\b|\bsdp\b|lvmdp|\bdb\b|distribution ?board|switchboard|switchgear|busbar|busduct|genset|generator|transformer|trafo|\bups\b|battery|baterai|solar|\bpv\b|cctv|camera|kamera|data|telepon|telephone|network|jaringan|rack|server|speaker|sound|tata suara|access ?control|junction|mcb|mccb|receptacle|grounding|earthing|lightning|petir|\bbms\b|telecom|fiber|sensor|detector|elevator|lift|escalator|equipment|flow ?terminal|distribution ?element|controller|segment/i,
   },
   {
     discipline: 'structure',
@@ -20,7 +70,7 @@ const RULES: Array<{ discipline: Discipline; keys: RegExp }> = [
   },
   {
     discipline: 'architecture',
-    keys: /wall|dinding|door|pintu|window|jendela|floor|lantai|roof|atap|ceiling|plafon|plafond|stair|tangga|railing|pagar|curtain|furniture|furnish|meja|kursi|table|chair|cabinet|lemari|casework|covering|finish|tile|keramik|parapet|canopy|kanopi|facade|fasad|louver|partition|partisi|ramp|glass|kaca|mullion|panel/i,
+    keys: /wall|dinding|door|pintu|window|jendela|floor|lantai|roof|atap|ceiling|plafon|plafond|stair|tangga|railing|pagar|curtain|furniture|furnish|meja|kursi|table|chair|cabinet|lemari|casework|covering|finish|tile|keramik|parapet|canopy|kanopi|facade|fasad|partition|partisi|ramp|glass|kaca|mullion|panel/i,
   },
   {
     discipline: 'site',

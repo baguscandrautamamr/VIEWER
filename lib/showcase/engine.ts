@@ -99,7 +99,7 @@ const MINIMAP_RECTS = 900;
 // bisa makan ratusan ms, dan kalau penggabungan menumpang frame, prosesnya
 // merayap. Selama menyiapkan model, menggambar sengaja direm (lihat
 // MERGE_RENDER_EVERY_MS) supaya hampir semua waktu dipakai menyiapkan.
-const MERGE_BUDGET_MS = 24;
+const MERGE_BUDGET_MS = 8;
 const MERGE_RENDER_EVERY_MS = 260;
 // Di atas ambang ini bayangan dimatikan otomatis: lintasan bayangan
 // menggandakan kerja vertex, dan pada model sebesar ini itu yang bikin
@@ -230,6 +230,10 @@ export class ShowcaseEngine {
     token: number;
     pieces: Piece[];
     pi: number;
+    vertexCursor: number;
+    groupCursor: number;
+    indexCursor: number;
+    paintCursor: number;
     vOff: number[];
     iOff: number[];
     geomUse: Map<THREE.BufferGeometry, number>;
@@ -246,6 +250,11 @@ export class ShowcaseEngine {
   private downAt = { x: 0, y: 0 };
   private clock = new THREE.Clock();
   private raf = 0;
+  private renderDirty = true;
+  private renderedPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+  private renderedQuaternion = new THREE.Quaternion();
+  private renderedFrames = 0;
+  private renderedTime = 0;
   private frames = 0;
   private lastStats = 0;
   private lastHover = 0;
@@ -272,7 +281,7 @@ export class ShowcaseEngine {
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
     this.camera.position.set(30, 20, 30);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
     // Pixel ratio dibatasi 1,5: di layar retina, DPR 2–3 berarti 4–9× piksel
     // yang harus di-shading — tidak sepadan untuk presentasi.
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
@@ -336,6 +345,7 @@ export class ShowcaseEngine {
   // ------------------------------------------------------------------ load
   load(url: string) {
     const token = ++this.loadToken;
+    this.releaseMergeSources();
     this.merge = null;
     window.clearTimeout(this.mergeTimer);
     const loader = new GLTFLoader();
@@ -347,12 +357,18 @@ export class ShowcaseEngine {
       url,
       (gltf) => {
         draco.dispose();
-        if (this.disposed || token !== this.loadToken) return;
+        if (this.disposed || token !== this.loadToken) {
+          this.disposeSource(gltf.scene, true);
+          return;
+        }
         try {
           this.installModel(gltf.scene, gltf.parser, token);
         } catch (err) {
           console.error('Gagal menyiapkan model:', err);
           this.emit('error', 'prepare');
+        } finally {
+          // The merged viewer uses vertex colors, never the source textures.
+          this.disposeSource(gltf.scene, false);
         }
       },
       (ev) => {
@@ -557,6 +573,10 @@ export class ShowcaseEngine {
       token,
       pieces,
       pi: 0,
+      vertexCursor: 0,
+      groupCursor: 0,
+      indexCursor: 0,
+      paintCursor: 0,
       vOff: new Array(this.parts.length).fill(0),
       iOff: new Array(this.parts.length).fill(0),
       geomUse,
@@ -587,7 +607,7 @@ export class ShowcaseEngine {
     const sliceV = st.vOff.slice();
     const sliceI = st.iOff.slice();
 
-    while (st.pi < st.pieces.length) {
+    mergeSlice: while (st.pi < st.pieces.length) {
       const piece = st.pieces[st.pi];
       const part = this.parts[piece.part];
       const geometry = piece.geometry;
@@ -606,7 +626,8 @@ export class ShowcaseEngine {
       const rec = piece.rec;
 
       normalMatrix.getNormalMatrix(piece.matrix);
-      for (let k = 0; k < piece.vCount; k++) {
+      const mirrored = piece.matrix.determinant() < 0;
+      for (let k = st.vertexCursor; k < piece.vCount; k++) {
         v.fromBufferAttribute(pos, k).applyMatrix4(piece.matrix);
         const o = (vOff + k) * 3;
         position[o] = v.x;
@@ -625,43 +646,49 @@ export class ShowcaseEngine {
         normal[o + 1] = v.y;
         normal[o + 2] = v.z;
         part.vertexEid[vOff + k] = rec.eid;
+        st.vertexCursor = k + 1;
+        if ((k & 1023) === 1023 && performance.now() - t0 >= MERGE_BUDGET_MS) break mergeSlice;
       }
 
       let gi = iOff;
-      for (const g of piece.groups) {
+      for (let g = 0; g < st.groupCursor; g++) gi += piece.groups[g].count;
+      for (; st.groupCursor < piece.groups.length; st.groupCursor++) {
+        const g = piece.groups[st.groupCursor];
         const [r, gg, b, a] = g.color;
-        if (src) {
-          for (let k = 0; k < g.count; k++) {
-            const vi = src.getX(g.start + k) + vOff;
-            index[gi + k] = vi;
-            const co = vi * 4;
-            part.baseOriginal[co] = r;
-            part.baseOriginal[co + 1] = gg;
-            part.baseOriginal[co + 2] = b;
-            part.baseOriginal[co + 3] = a;
-          }
-        } else {
-          for (let k = 0; k < g.count; k++) {
-            const vi = g.start + k + vOff;
-            index[gi + k] = vi;
-            const co = vi * 4;
-            part.baseOriginal[co] = r;
-            part.baseOriginal[co + 1] = gg;
-            part.baseOriginal[co + 2] = b;
-            part.baseOriginal[co + 3] = a;
-          }
+        for (let k = st.indexCursor; k < g.count; k++) {
+          const vi = (src ? src.getX(g.start + k) : g.start + k) + vOff;
+          // Baking a reflection into positions reverses triangle winding.
+          // Preserve the front face after removing the source mesh transform.
+          const dst = mirrored ? k - (k % 3) + (k % 3 === 1 ? 2 : k % 3 === 2 ? 1 : 0) : k;
+          index[gi + dst] = vi;
+          const co = vi * 4;
+          part.baseOriginal[co] = r;
+          part.baseOriginal[co + 1] = gg;
+          part.baseOriginal[co + 2] = b;
+          part.baseOriginal[co + 3] = a;
+          st.indexCursor = k + 1;
+          if ((k & 4095) === 4095 && performance.now() - t0 >= MERGE_BUDGET_MS) break mergeSlice;
         }
+        st.indexCursor = 0;
         gi += g.count;
       }
 
+      // Paint only this new piece, once. Repainting every earlier range of
+      // the same Revit element made preparation quadratic in its mesh count.
+      while (st.paintCursor < piece.vCount) {
+        const count = Math.min(4096, piece.vCount - st.paintCursor);
+        this.paintRecord(rec, [{
+          part: piece.part, vStart: vOff + st.paintCursor, vCount: count,
+          tStart: 0, tCount: 0,
+        }]);
+        st.paintCursor += count;
+        if (performance.now() - t0 >= MERGE_BUDGET_MS) break mergeSlice;
+      }
       rec.ranges.push({
-        part: piece.part,
-        vStart: vOff,
-        vCount: piece.vCount,
-        tStart: iOff / 3,
-        tCount: (gi - iOff) / 3,
+        part: piece.part, vStart: vOff, vCount: piece.vCount,
+        tStart: iOff / 3, tCount: (gi - iOff) / 3,
       });
-      this.paintRecord(rec);
+      st.vertexCursor = st.groupCursor = st.indexCursor = st.paintCursor = 0;
 
       st.vOff[piece.part] = vOff + piece.vCount;
       st.iOff[piece.part] = gi;
@@ -727,7 +754,7 @@ export class ShowcaseEngine {
     }
 
     this.finishIndex();
-    this.repaintAll();
+    this.renderDirty = true;
 
     // Model sangat berat: bayangan dimatikan otomatis (lintasan bayangan
     // menggandakan kerja vertex). Bisa dinyalakan lagi dari panel Tampilan.
@@ -766,6 +793,8 @@ export class ShowcaseEngine {
   }
 
   private clearModel() {
+    this.releaseMergeSources();
+    this.renderDirty = true;
     if (this.modelGroup) {
       this.scene.remove(this.modelGroup);
       for (const p of this.parts) p?.geometry.dispose();
@@ -785,6 +814,30 @@ export class ShowcaseEngine {
     this.hoverGid = null;
     this.labelCandidates = [];
     this.minimapRects = [];
+  }
+
+  private releaseMergeSources() {
+    this.merge?.geomUse.forEach((_, geometry) => geometry.dispose());
+  }
+
+  private disposeSource(root: THREE.Object3D, geometries: boolean) {
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    const buffers = new Set<THREE.BufferGeometry>();
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      if (geometries) buffers.add(obj.geometry);
+      const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const material of list) materials.add(material);
+    });
+    materials.forEach((material) => {
+      for (const value of Object.values(material)) {
+        if (value instanceof THREE.Texture) textures.add(value);
+      }
+      material.dispose();
+    });
+    textures.forEach((texture) => texture.dispose());
+    buffers.forEach((geometry) => geometry.dispose());
   }
 
   private isSheerMaterial(mat: THREE.Material | THREE.Material[]): boolean {
@@ -886,8 +939,12 @@ export class ShowcaseEngine {
     if (this.ground) {
       this.scene.remove(this.ground);
       this.ground.geometry.dispose();
+      (this.ground.material as THREE.Material).dispose();
     }
-    if (this.grid) this.scene.remove(this.grid);
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+    }
     const w = this.bounds.max[0] - this.bounds.min[0];
     const d = this.bounds.max[2] - this.bounds.min[2];
     const span = Math.max(w, d, 10) * 6;
@@ -929,6 +986,7 @@ export class ShowcaseEngine {
   }
 
   setShadows(on: boolean) {
+    this.renderDirty = true;
     this.shadowsWanted = on;
     this.renderer.shadowMap.enabled = on;
     this.keyLight.castShadow = on;
@@ -955,10 +1013,10 @@ export class ShowcaseEngine {
     this.repaintAll();
   }
 
-  private paintRecord(rec: ElementRecord) {
+  private paintRecord(rec: ElementRecord, ranges = rec.ranges) {
     const sel = rec.gid === this.selectedGid;
     const hi = !sel && this.highlighted.has(rec.gid);
-    for (const r of rec.ranges) {
+    for (const r of ranges) {
       const part = this.parts[r.part];
       if (!part) continue;
       const arr = part.color.array as Uint8Array;
@@ -979,6 +1037,7 @@ export class ShowcaseEngine {
   }
 
   private repaintAll() {
+    this.renderDirty = true;
     this.records.forEach((rec) => this.paintRecord(rec));
     for (const p of this.parts) {
       if (!p) continue;
@@ -989,6 +1048,7 @@ export class ShowcaseEngine {
 
   // Cat ulang hanya elemen tertentu; upload ke GPU per rentang kalau sedikit.
   private repaint(gids: Iterable<string>) {
+    this.renderDirty = true;
     const list = Array.from(gids)
       .map((g) => this.records.get(g))
       .filter((r): r is ElementRecord => Boolean(r));
@@ -1304,6 +1364,7 @@ export class ShowcaseEngine {
   private bindInput() {
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', this.onPointerDown);
+    el.addEventListener('webglcontextrestored', this.onContextRestored);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointercancel', this.onPointerUp);
@@ -1359,7 +1420,7 @@ export class ShowcaseEngine {
         this.setHover(null, 0, 0);
         return;
       }
-      this.setHover(this.pickAt(e.clientX, e.clientY), x, y);
+      this.setHover(this.pickAt(e.clientX, e.clientY, true), x, y);
     }
   };
   private onPointerUp = (e: PointerEvent) => {
@@ -1402,6 +1463,10 @@ export class ShowcaseEngine {
   private onResize = () => {
     this.resize();
   };
+  private onContextRestored = () => {
+    this.renderDirty = true;
+    this.renderer.shadowMap.needsUpdate = true;
+  };
   resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -1409,6 +1474,7 @@ export class ShowcaseEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.renderDirty = true;
   }
 
   private stepKeys(dt: number) {
@@ -1446,10 +1512,10 @@ export class ShowcaseEngine {
   }
 
   // ------------------------------------------------------------------ picking
-  private pickAt(clientX: number, clientY: number): string | null {
+  private pickAt(clientX: number, clientY: number, hover = false): string | null {
     const rect = this.container.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-    return this.pickNdc(ndc);
+    return this.pickNdc(ndc, hover);
   }
 
   private isNonPhysical(rec: ElementRecord) {
@@ -1481,7 +1547,7 @@ export class ShowcaseEngine {
   // Jarak tembak terdekat ke segitiga milik satu elemen.
   //   Infinity = diuji, tapi meleset
   //   -1       = tidak diuji karena terlalu besar (pakai jarak kotak saja)
-  private hitDistance(ray: THREE.Ray, rec: ElementRecord): number {
+  private hitDistance(ray: THREE.Ray, rec: ElementRecord, deadline = Infinity): number {
     let best = Infinity;
     let tris = 0;
     for (const r of rec.ranges) tris += r.tCount;
@@ -1498,6 +1564,7 @@ export class ShowcaseEngine {
       const index = part.geometry.index!.array as Uint32Array | Uint16Array;
       const end = (r.tStart + r.tCount) * 3;
       for (let t = r.tStart * 3; t < end; t += 3) {
+        if ((t - r.tStart * 3) % 3072 === 0 && performance.now() >= deadline) return Infinity;
         const i0 = index[t] * 3;
         const i1 = index[t + 1] * 3;
         const i2 = index[t + 2] * 3;
@@ -1516,7 +1583,8 @@ export class ShowcaseEngine {
   // Pilih elemen di bawah sinar. Dua putaran: benda padat dulu, baru objek
   // tembus pandang / non-fisik (volume ruang, grid, anotasi) — supaya yang
   // "kosong" tidak pernah merebut klik dari benda nyata di belakangnya.
-  private pickNdc(ndc: THREE.Vector2): string | null {
+  private pickNdc(ndc: THREE.Vector2, hover = false): string | null {
+    const deadline = hover ? performance.now() + 6 : Infinity;
     if (this.merge || this.recordList.length === 0) return null;
     this.raycaster.setFromCamera(ndc, this.camera);
     const ray = this.raycaster.ray;
@@ -1554,9 +1622,9 @@ export class ShowcaseEngine {
       for (const k of order) {
         // Kotak berikutnya sudah lebih jauh dari tembakan terbaik -> selesai.
         if (cands[k] > bestDist) break;
-        if (tested++ > PICK_CANDIDATES) break;
+        if (tested++ >= PICK_CANDIDATES || performance.now() >= deadline) break;
         const rec = this.recordList[cands[k + 1]];
-        const d = this.hitDistance(ray, rec);
+        const d = this.hitDistance(ray, rec, deadline);
         if (d < 0) {
           if (cands[k] < approxDist) {
             approxDist = cands[k];
@@ -1586,7 +1654,7 @@ export class ShowcaseEngine {
     if (this.mode !== 'walk' || this.merge) return;
     if (now - this.lastHover < 200) return;
     this.lastHover = now;
-    const gid = this.pickNdc(new THREE.Vector2(0, 0));
+    const gid = this.pickNdc(new THREE.Vector2(0, 0), true);
     this.setHover(gid, this.container.clientWidth / 2, this.container.clientHeight / 2);
   }
   get hovered() {
@@ -1805,6 +1873,7 @@ export class ShowcaseEngine {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
     const dtRaw = this.clock.getDelta();
+    if (document.hidden || this.renderer.getContext().isContextLost()) return;
     const dt = Math.min(dtRaw, 0.1);
     const now = performance.now();
     // Tween kamera memakai waktu nyata (bukan dt yang di-clamp) supaya durasi
@@ -1821,7 +1890,18 @@ export class ShowcaseEngine {
       this.renderer.render(this.scene, this.camera);
       return;
     }
-    this.renderer.render(this.scene, this.camera);
+    const changed = this.renderDirty
+      || !this.camera.position.equals(this.renderedPosition)
+      || !this.camera.quaternion.equals(this.renderedQuaternion);
+    if (changed) {
+      this.renderer.render(this.scene, this.camera);
+      this.renderedPosition.copy(this.camera.position);
+      this.renderedQuaternion.copy(this.camera.quaternion);
+      this.renderDirty = false;
+      // Only moving frames contribute to the slow-render safety check.
+      this.renderedFrames++;
+      this.renderedTime += dtRaw;
+    }
     this.stepLabels();
     this.stepMinimap(now);
     this.stepCenterLook(now);
@@ -1833,13 +1913,22 @@ export class ShowcaseEngine {
       const p = this.camera.position;
       // Jaring pengaman: kalau frame tetap berat berturut-turut, matikan
       // bayangan sekali saja supaya viewer tetap bisa dipakai.
-      if (fps > 0 && fps < 6 && this.parts.length > 0 && !this.merge) {
+      const activeFps = this.renderedTime > 0 ? this.renderedFrames / this.renderedTime : 0;
+      if (changed && activeFps > 0 && activeFps < 20 && this.parts.length > 0 && !this.merge) {
         this.slowFrames++;
-        if (this.slowFrames >= 6 && this.shadowsOn) {
-          this.setShadows(false);
+        if (this.slowFrames >= 3) {
+          if (this.shadowsOn) this.setShadows(false);
+          const ratio = this.renderer.getPixelRatio();
+          if (ratio > 0.75) {
+            this.renderer.setPixelRatio(Math.max(0.75, ratio - 0.25));
+            this.renderDirty = true;
+          }
           this.autoLightened = true;
+          this.slowFrames = 0;
         }
       } else this.slowFrames = 0;
+      this.renderedFrames = 0;
+      this.renderedTime = 0;
       this.emit('stats', {
         fps,
         eyeHeight: p.y - this.groundY,
@@ -1851,8 +1940,9 @@ export class ShowcaseEngine {
     }
   };
 
-  // Screenshot PNG dari frame terakhir (preserveDrawingBuffer aktif).
+  // Render immediately before capture; normal frames need no preserved buffer.
   snapshot(): string {
+    this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
   }
 
@@ -1862,6 +1952,7 @@ export class ShowcaseEngine {
     window.clearTimeout(this.mergeTimer);
     const el = this.renderer.domElement;
     el.removeEventListener('pointerdown', this.onPointerDown);
+    el.removeEventListener('webglcontextrestored', this.onContextRestored);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerUp);
@@ -1873,6 +1964,9 @@ export class ShowcaseEngine {
     this.controls.dispose();
     this.clearModel();
     this.ground?.geometry.dispose();
+    (this.ground?.material as THREE.Material | undefined)?.dispose();
+    this.grid?.dispose();
+    this.keyLight.shadow.dispose();
     [this.matOpaque, this.matSheer].forEach((m) => m.dispose());
     this.renderer.dispose();
     el.remove();

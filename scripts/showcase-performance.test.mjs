@@ -40,6 +40,8 @@ function harness(root) {
     cMono: [120, 130, 140], cMonoGlass: [110, 120, 130],
     cSelected: [200, 255, 80], cHighlight: [150, 220, 60],
     matOpaque: new THREE.MeshStandardMaterial(), matSheer: new THREE.MeshStandardMaterial(),
+    matInst: new THREE.MeshStandardMaterial(), matInstSheer: new THREE.MeshStandardMaterial(),
+    instGroups: [], triangles: 0, uniqueTriangles: 0,
     emit() {}, scheduleMerge() {},
     finishMerge() { this.merge = null; this.finishIndex(); },
   });
@@ -58,10 +60,14 @@ function finish(engine) {
 }
 
 test('multi-mesh elements paint each vertex once and retain picking identity', () => {
+  // Geometri per mesh dibuat sendiri-sendiri supaya jalur yang diuji adalah
+  // penggabungan (bukan instans; itu diuji terpisah di bawah).
   const root = new THREE.Group();
-  const geo = new THREE.BoxGeometry();
   const material = new THREE.MeshStandardMaterial();
+  let vertices = 0;
   for (let i = 0; i < 80; i++) {
+    const geo = new THREE.BoxGeometry(1 + i / 100, 1, 1);
+    vertices += geo.attributes.position.count;
     const mesh = new THREE.Mesh(geo, material);
     mesh.userData.globalId = 'shared-element';
     mesh.position.x = i % 8;
@@ -75,13 +81,49 @@ test('multi-mesh elements paint each vertex once and retain picking identity', (
     return paint.call(this, rec, ranges);
   };
   finish(engine);
-  assert.equal(painted, geo.attributes.position.count * 80);
+  assert.equal(painted, vertices);
   const rec = engine.records.get('shared-element');
   assert.equal(rec.ranges.length, 80);
   assert.equal(engine.elements.length, 1);
+  assert.equal(engine.instGroups.length, 0);
   for (const part of engine.parts) {
     assert.equal(part.geometry.drawRange.count, part.geometry.index.count);
-    assert.ok(part.vertexEid.every(eid => eid === rec.eid));
+  }
+});
+
+test('repeated geometry becomes instances instead of copied vertices', () => {
+  // Ini penyebab layar 3D kosong: menyalin vertex untuk tiap pemakaian
+  // meledakkan memori sampai konteks WebGL dilepas.
+  const root = new THREE.Group();
+  const geo = new THREE.BoxGeometry();
+  const material = new THREE.MeshStandardMaterial();
+  for (let i = 0; i < 80; i++) {
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.userData.globalId = `element-${i}`;
+    mesh.position.x = i % 8;
+    root.add(mesh);
+  }
+  const engine = harness(root);
+  let painted = 0;
+  const paint = engine.paintRecord;
+  engine.paintRecord = function(rec, ranges = rec.ranges) {
+    painted += ranges.length;
+    return paint.call(this, rec, ranges);
+  };
+  finish(engine);
+  // Satu kelompok instans, 80 instans, dan TIDAK ADA buffer gabungan.
+  assert.equal(engine.instGroups.length, 1);
+  assert.equal(engine.instGroups[0].filled, 80);
+  assert.equal(engine.parts.length, 0);
+  // Geometri disimpan sekali: segitiga unik = satu kotak saja.
+  assert.equal(engine.uniqueTriangles, geo.index.count / 3);
+  // Tiap elemen dicat sekali, lewat satu penempatan instans.
+  assert.equal(painted, 80);
+  for (let i = 0; i < 80; i++) {
+    const rec = engine.records.get(`element-${i}`);
+    assert.equal(rec.ranges.length, 1);
+    assert.equal(rec.ranges[0].kind, 1);
+    assert.equal(rec.ranges[0].instance, i);
   }
 });
 

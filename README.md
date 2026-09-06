@@ -56,6 +56,7 @@ npm install
 npm run dev      # development, http://localhost:3000
 npm run build    # production build
 npm start        # jalankan hasil build
+npm test         # uji identitas elemen + penggabungan/penggambaran mode presentasi
 ```
 
 ## Mode presentasi (viewer untuk client) + Asisten AI
@@ -91,9 +92,15 @@ Pintasan: **E** inspeksi · **F** fokus elemen terpilih · **T** tur · **L** la
 Model Revit besar punya puluhan ribu elemen. Mode presentasi **menggabungkan
 seluruh geometri jadi dua mesh** (padat & tembus pandang) saat dimuat, jadi tiap
 frame cuma 2 draw call — bukan puluhan ribu. Sorotan/seleksi/gaya ditulis
-sebagai **warna per-vertex** (Uint8, 4 byte), klik/hover memakai **BVH**
-(`three-mesh-bvh`) dengan identitas per-vertex, dan bayangan dirender sekali
+sebagai **warna per-vertex** (Uint8, 4 byte) dan bayangan dirender sekali
 (shadow map statis).
+
+Geometri yang **dipakai berulang** (tipe family yang sama muncul puluhan kali)
+tidak ikut digabung — itu dirender sebagai `InstancedMesh`: geometrinya
+disimpan sekali, tiap elemen hanya menyumbang satu matriks + satu warna. Ini
+penting: menyalinnya berulang pernah membuat model 3,5 juta segitiga unik
+mengembang jadi 34 juta segitiga (~3,2 GB) sehingga browser melepas konteks
+WebGL dan layar jadi kosong. Uji A/B pada model yang sama: 563 MB → 199 MB.
 
 Geometri gabungan dipecah lagi per **petak denah**, jadi petak yang di luar
 layar dilewati GPU (frustum culling) — terasa saat berjalan di dalam bangunan
@@ -101,17 +108,27 @@ besar. Memilih objek **tidak memakai indeks BVH** (membangunnya membekukan
 halaman pada model besar): sinar diuji ke kotak batas tiap elemen lalu ke
 segitiga beberapa kandidat terdekat — 6–13 ms per klik pada 60 ribu elemen.
 
-Penggabungan dikerjakan **sekali** dan **dicicil per potongan** (dijadwalkan
-sendiri, bukan menumpang render loop), jadi halaman tidak pernah membeku dan
-progresnya kelihatan. Selama itu tombol **Mode teknis** tetap bisa diklik
+Penggabungan dikerjakan **sekali** dan **dicicil per potongan 8 ms**
+(dijadwalkan sendiri lewat `MessageChannel`, bukan menumpang render loop dan
+bukan `setTimeout` yang diklem browser). Potongan bisa berhenti di tengah satu
+mesh raksasa, jadi satu elemen besar pun tidak memblokir halaman. Selama itu tombol **Mode teknis** tetap bisa diklik
 sebagai jalan keluar. Uji 60 ribu elemen: siap ~9 detik (sebelum diperbaiki: 64
 detik), jeda JavaScript terpanjang setelah siap ~0,2 detik, dan biaya per frame
 ~5× lebih ringan daripada mode teknis pada model yang sama.
 
+Frame yang **tidak berubah tidak digambar ulang**: selama kamera diam dan
+tidak ada perubahan warna/ukuran, GPU menganggur. Tab yang disembunyikan juga
+berhenti menggambar.
+
 Untuk model sangat berat, viewer menurunkan kualitas sendiri: di atas 6 juta
-segitiga **bayangan dimatikan otomatis** (dengan pemberitahuan, bisa dinyalakan
-lagi di panel kiri). Jumlah elemen, jumlah segitiga, dan FPS bisa dilihat di
-panel **?** kanan atas — kirimkan angka itu kalau tampilan masih terasa berat.
+segitiga **bayangan dimatikan otomatis**, dan kalau frame tetap berat
+resolusinya diturunkan bertahap (dengan pemberitahuan, bisa dinyalakan lagi di
+panel kiri). Kalau browser tetap melepas konteks WebGL, viewer menampilkan
+pesan jelas — bukan layar kosong.
+
+Panel **?** kanan atas menunjukkan jumlah elemen, segitiga yang digambar,
+segitiga unik, jumlah geometri berulang, dan FPS — kirimkan angka itu kalau
+tampilan masih terasa berat.
 
 Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
 tidak terasa. Mode teknis tetap merender per elemen seperti semula.

@@ -181,6 +181,7 @@ export const locales = {
       heavyNotice: 'Model ini berat ({tri} juta segitiga) — bayangan dimatikan otomatis supaya navigasi tetap lancar. Bisa dinyalakan lagi di panel kiri.',
       statTriangles: '{tri} juta segitiga',
       loadError: 'Gagal memuat model. Coba refresh halaman.',
+      contextLost: 'Tampilan 3D dihentikan browser (memori grafis habis). Coba tutup tab lain lalu refresh, atau pakai Mode teknis lewat tombol di atas.',
       lookingAt: 'Sedang melihat',
       pressE: 'Tekan E untuk inspeksi',
       // Tur
@@ -475,6 +476,7 @@ export const locales = {
       heavyNotice: 'This model is heavy ({tri} million triangles) — shadows were turned off automatically to keep navigation smooth. You can turn them back on in the left panel.',
       statTriangles: '{tri} million triangles',
       loadError: 'Failed to load the model. Try refreshing the page.',
+      contextLost: 'The browser stopped the 3D view (out of graphics memory). Close other tabs and refresh, or use Technical mode with the button above.',
       lookingAt: 'Looking at',
       pressE: 'Press E to inspect',
       tourTitle: 'Guided tour',

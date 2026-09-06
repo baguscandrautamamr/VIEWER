@@ -805,3 +805,36 @@ Detail lengkap ada di `README.md`.
 52. **Warna pada InstancedMesh lewat `instanceColor`, bukan warna per-vertex.**
     Materialnya harus putih (warna dikalikan), dan alpha tidak tersedia per
     instans — jadi transparansi untuk kelompok instans ditentukan materialnya.
+
+53. **Grup material bikin draw call berlipat di InstancedMesh.** Satu kotak
+    Three punya enam grup; kalau tiap grup jadi kelompok instans sendiri,
+    satu geometri berulang berubah jadi enam `InstancedMesh`. Gabungkan grup
+    yang memakai MATERIAL yang sama jadi satu sub-geometri (index-nya
+    disambung), baru buat instansnya.
+
+54. **`setTimeout(0)` bersarang diklem ~4 ms oleh browser.** Dengan potongan
+    kerja 8 ms, klem itu sendiri memakan sekitar sepertiga waktu penyiapan.
+    Penjadwal yang tidak diklem: `MessageChannel` + `postMessage` (pola yang
+    dipakai scheduler React). Pembatalannya lewat state (`this.merge = null`),
+    bukan `clearTimeout`.
+
+55. **Frame yang tidak berubah tidak perlu digambar.** Render hanya kalau
+    kamera bergeser/berputar atau ada penanda `renderDirty` (warna, ukuran,
+    bayangan, konteks pulih). Konsekuensinya: SETIAP perubahan yang terlihat
+    wajib menyalakan penanda itu, dan penghitung FPS "berat" harus memakai
+    frame yang benar-benar digambar — bukan jumlah putaran loop.
+
+56. **Mencicil pekerjaan tidak cukup per objek — harus bisa berhenti di tengah
+    objek.** Satu mesh 90 ribu vertex melewati anggaran waktu berapa pun kalau
+    potongan hanya bisa putus di batas mesh. Simpan kursor (vertex, grup,
+    index, cat) di state penggabungan dan lanjutkan dari situ.
+
+57. **Mengecat ulang seluruh rentang elemen tiap potongan itu kuadratik.**
+    Elemen Revit dengan ratusan mesh akan dicat ulang ratusan kali. Cat hanya
+    rentang yang baru ditambahkan — berlaku untuk jalur gabungan MAUPUN jalur
+    instans.
+
+58. **Matriks bercermin (determinan negatif) membalik urutan putar segitiga.**
+    Saat transformasi mesh dipanggang ke posisi vertex, muka depan jadi
+    menghadap ke dalam dan objek terlihat "bolong". Tukar dua index terakhir
+    tiap segitiga untuk piece yang matriksnya bercermin.

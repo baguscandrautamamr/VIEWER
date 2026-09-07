@@ -5,7 +5,7 @@ import { locales, type Locale } from '@/lib/i18n';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
 import { DISCIPLINE_ORDER, type Discipline } from '@/lib/showcase/disciplines';
 import { fetchElementNames } from '@/lib/showcase/elementNames';
-import { ShowcaseEngine, type EngineStats, type HoverInfo, type LoadProgress, type Style } from '@/lib/showcase/engine';
+import { ShowcaseEngine, type EngineStats, type HoverInfo, type LoadProgress, type Style, type SectionClip } from '@/lib/showcase/engine';
 import { resolveQuery } from '@/lib/showcase/search';
 import { buildAutoTour, EYE_LEVEL, type TourStrings } from '@/lib/showcase/tour';
 import { fetchSavedTour, saveTour } from '@/lib/showcase/tourStore';
@@ -85,6 +85,9 @@ export default function ShowcaseViewer({
   const [style, setStyle] = useState<Style>('mono');
   const [shadows, setShadows] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
+  // Potongan (section box): 6 bidang X/Y/Z ±, nilai 0..1 (1 = tepi model).
+  const [sectionOn, setSectionOn] = useState(false);
+  const [clip, setClip] = useState<SectionClip>({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
   const [planActive, setPlanActive] = useState(false);
   const [side, setSide] = useState<SidePanel>('none');
   const [navOpen, setNavOpen] = useState(false);
@@ -271,6 +274,11 @@ export default function ShowcaseViewer({
       /* abaikan */
     }
   }, [style, labels]);
+
+  // Terapkan potongan model (section box) ke mesin tiap kali berubah.
+  useEffect(() => {
+    engineRef.current?.setSection(sectionOn, clip);
+  }, [sectionOn, clip]);
 
   // Area yang tertutup panel — label 3D, tooltip, dan label seleksi menjauhinya.
   useEffect(() => {
@@ -476,6 +484,9 @@ export default function ShowcaseViewer({
     engine.select(null);
     engine.overview();
     setPlanActive(false);
+    // Reset potongan (section box) ke tepi penuh.
+    setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+    setSectionOn(false);
   }, [exitTour]);
 
   const onViewpoint = useCallback(
@@ -735,6 +746,8 @@ export default function ShowcaseViewer({
         setLabels(on);
       } else if (k === 'r') {
         resetView();
+      } else if (k === 's') {
+        setSectionOn((v) => !v);
       } else if (k === '/' ) {
         e.preventDefault();
         setNavOpen(true);
@@ -934,6 +947,10 @@ export default function ShowcaseViewer({
               {Icons.spark}
               {s.assistant}
             </button>
+            <button type="button" className={`sc-pill ${sectionOn ? 'is-on' : ''}`} onClick={() => setSectionOn((v) => !v)} title={s.section}>
+              {Icons.slice}
+              {s.section}
+            </button>
             {canEdit && (
               <button type="button" className={`sc-pill ${side === 'tour' ? 'is-on' : ''}`} onClick={() => setSide(side === 'tour' ? 'none' : 'tour')} title={s.tourEditTitle}>
                 {Icons.camera}
@@ -977,6 +994,48 @@ export default function ShowcaseViewer({
       <div className="sc-status">
         <span className="truncate">{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
       </div>
+
+      {/* Panel section box: 6 slider X/Y/Z, + dan −. */}
+      {sectionOn && loadState === 'ready' && (
+        <Panel className="sc-section">
+          <div className="flex items-center justify-between">
+            <span className="sc-eyebrow">{s.section}</span>
+            <button
+              type="button"
+              className="text-[11px] text-white/55 hover:text-white"
+              onClick={() => {
+                setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+                setSectionOn(false);
+              }}
+            >
+              {s.resetView}
+            </button>
+          </div>
+          {(
+            [
+              ['xMax', 'X +'],
+              ['xMin', 'X −'],
+              ['yMax', 'Y +'],
+              ['yMin', 'Y −'],
+              ['zMax', 'Z +'],
+              ['zMin', 'Z −'],
+            ] as [keyof SectionClip, string][]
+          ).map(([field, label]) => (
+            <label key={field} className="flex items-center gap-2 text-[11px]">
+              <span className="w-7 shrink-0 text-white/55">{label}</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={clip[field]}
+                onChange={(e) => setClip((c) => ({ ...c, [field]: parseFloat(e.target.value) }))}
+                className="sc-section-range"
+              />
+            </label>
+          ))}
+        </Panel>
+      )}
 
       {/* Panel kanan */}
       {side === 'inspect' && selected && (

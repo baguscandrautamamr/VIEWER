@@ -132,4 +132,5 @@ export const Icons = {
   chevronDown: <I d="M6 9l6 6 6-6" />,
   send: <I d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />,
   eye: <I d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0" />,
+  slice: <I d="M5 3h14v18H5zM5 12h14M9 3v18M15 3v18" />,
 };

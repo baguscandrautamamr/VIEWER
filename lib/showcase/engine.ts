@@ -84,6 +84,18 @@ export interface Insets {
   bottom: number;
 }
 
+// Potongan (section box). Setiap sumbu punya bidang + (maks) dan − (min),
+// nilai 0..1 relatif terhadap setengah ukuran model: 1 = bidang tepat di tepi
+// model (tidak memotong apa pun), 0 = bidang di tengah (memotong separuh).
+export interface SectionClip {
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
+  zMin: number;
+  zMax: number;
+}
+
 type Events = {
   select: string | null;
   hover: HoverInfo | null;
@@ -210,6 +222,8 @@ export class ShowcaseEngine {
   labelsOn = false;
   walkSpeed = 3; // m/s
   planActive = false;
+  sectionOn = false;
+  sectionClip: SectionClip = { xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
 
   private records = new Map<string, ElementRecord>();
   private recordList: ElementRecord[] = [];
@@ -247,6 +261,17 @@ export class ShowcaseEngine {
     opacity: MONO_GLASS_ALPHA / 255,
     depthWrite: false,
   });
+  // 6 bidang potong (section box), urutan: X+, X−, Y+, Y−, Z+, Z−. Dipasang
+  // PER MATERIAL (bukan global) supaya lantai & grid tidak ikut terpotong.
+  private clipPlanes: THREE.Plane[] = [
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, 0, -1), 0),
+    new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+  ];
+  private clipMaterials: THREE.Material[] = [];
   private cMono = u8(COLORS.mono);
   private cMonoGlass = u8(COLORS.monoGlass);
   private cHighlight = u8(COLORS.highlight);
@@ -325,6 +350,7 @@ export class ShowcaseEngine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false; // statis — lihat catatan di atas
+    this.renderer.localClippingEnabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.domElement.style.display = 'block';
@@ -932,6 +958,11 @@ export class ShowcaseEngine {
     this.finishIndex();
     this.renderDirty = true;
 
+    // Pasang material model yang akan menerima bidang potong (kecuali lantai
+    // & grid). Setelah ini, refreshClipping() menerapkan state saat ini.
+    this.clipMaterials = [this.matOpaque, this.matSheer, this.matInst, this.matInstSheer];
+    this.refreshClipping();
+
     if (this.triangles > HEAVY_TRIANGLES && this.shadowsWanted) {
       this.setShadows(false);
       this.autoLightened = true;
@@ -992,6 +1023,7 @@ export class ShowcaseEngine {
     this.hoverGid = null;
     this.labelCandidates = [];
     this.minimapRects = [];
+    this.clipMaterials = [];
   }
 
   // Geometri sumber GLTF dilepas saat model diganti/dibersihkan. Sub-geometri
@@ -1188,6 +1220,35 @@ export class ShowcaseEngine {
   }
   get shadowsOn() {
     return this.renderer.shadowMap.enabled;
+  }
+
+  // ------------------------------------------------------------------ section
+  // Pasang bidang potong ke material model (bukan renderer global), supaya
+  // lantai & grid di bawah tetap utuh. Dipanggil saat model selesai digabung
+  // dan tiap kali nilai potongan berubah.
+  private refreshClipping() {
+    const planes = this.sectionOn ? this.clipPlanes : [];
+    const half = this.bounds.max.map((v, i) => (v - this.bounds.min[i]) / 2 || 1) as [number, number, number];
+    const [hx, hy, hz] = half;
+    const c = this.sectionClip;
+    this.clipPlanes[0].constant = hx * c.xMax;
+    this.clipPlanes[1].constant = hx * c.xMin;
+    this.clipPlanes[2].constant = hy * c.yMax;
+    this.clipPlanes[3].constant = hy * c.yMin;
+    this.clipPlanes[4].constant = hz * c.zMax;
+    this.clipPlanes[5].constant = hz * c.zMin;
+    for (const m of this.clipMaterials) {
+      m.clippingPlanes = planes;
+      m.clipShadows = true;
+      m.needsUpdate = true;
+    }
+    this.renderDirty = true;
+  }
+
+  setSection(on: boolean, clip: SectionClip) {
+    this.sectionOn = on;
+    this.sectionClip = clip;
+    this.refreshClipping();
   }
 
   // ------------------------------------------------------------------ colors

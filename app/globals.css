@@ -137,6 +137,14 @@ body {
 }
 .sc-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
 
+/* Panel potongan (section box) — mengambang kiri-atas, di bawah panel Jelajahi. */
+.sc-section {
+  position: absolute; left: calc(var(--sc-gap) + var(--sc-explore-w) + 10px);
+  top: calc(var(--sc-topbar-h) + 6px); z-index: 24; width: 190px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;
+}
+.sc-section-range { flex: 1; min-width: 0; accent-color: var(--sc-accent); }
+
 .sc-pill {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 7px;
   font-size: 12px; color: rgba(255,255,255,0.75); transition: all 120ms;

@@ -1,8 +1,0 @@
-﻿feat(web): turn off section sekalian kembalikan tampilan awal
-
-Setelah slider section digeser lalu dimatikan, kamera masih di posisi waktu
-memotong (menghadap area kosong hasil potongan) sehingga model terlihat
-masih terpotong padahal cuma sudut pandangnya. Tombol Matikan potongan kini
-memanggil resetView: potongan dibuang dan kamera kembali ke tampilan awal.
-
-Co-Authored-By: [CC] <noreply@anthropic.com>

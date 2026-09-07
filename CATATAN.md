@@ -17,10 +17,10 @@ Website presentasi model Revit ke client:
 - Sheet PDF yang bisa diklik untuk memindahkan sudut kamera 3D
 - Auto-update saat model baru di-push dari Revit (Supabase Realtime)
 - Download file `.rvt` (disimpan di Google Drive)
-- **Mode presentasi** (gaya virtual plant tour): jalan kaki/orbit/**statis**
-  (kamera beku), tur terpandu otomatis, navigator & inspeksi elemen, label,
-  minimap, section box dengan bingkai 3D, **Asisten AI** yang bisa menggerakkan
-  viewer
+- **Mode presentasi** (gaya virtual plant tour): jalan kaki/orbit, tur
+  terpandu otomatis, navigator & inspeksi elemen, label, minimap, section box
+  dengan bingkai 3D, kotak penanda elemen terpilih, **Asisten AI** yang bisa
+  menggerakkan viewer
 
 **Stack:** Next.js 15 · React 19 · Three.js 0.170 · Tailwind · Supabase
 (database + Realtime) · Google Drive API (penyimpanan file besar) ·
@@ -107,6 +107,29 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Mode statis DIHAPUS** (dibuat pagi itu, diminta lepas sore itu juga).
+  Pill ketiga, cabang `setMode('static')`, string i18n, dan test-nya dibuang
+  semua. Alasan: tak terpakai dan menambah satu kondisi di tiap jalur mode.
+- **Marker seleksi di mode presentasi (gaya Mode teknis).** Elemen terpilih
+  kini dibingkai kotak kawat hijau (`selBox` di engine) — model lain tetap
+  utuh. Dipasang ke scene, `depthTest=false`, dilebarkan 2% dari kotak batas
+  supaya tidak menempel permukaan.
+- **Performa mode teknis: render on-demand.** Dulu animate loop menggambar
+  60×/detik TANPA HENTI walaupun kamera diam — di model besar GPU bekerja
+  penuh terus-menerus. Sekarang frame hanya digambar kalau posisi/target
+  kamera berubah atau ada penanda `needsRender()` (isolate, warna, sembunyi,
+  ukur, section, markup, seleksi, resize, kecerahan). Pixel ratio juga
+  dibatasi 1,5 (dulu devicePixelRatio penuh — di retina berarti 4–9× piksel).
+  Konsekuensi: **setiap pembaruan scene baru wajib memanggil `needsRender()`**
+  (fungsi di `ModelViewer.tsx`), kalau tidak layar tidak ikut berubah.
+- **Mode presentasi tidak mengunduh ulang tiap dibuka.** GLB kini disimpan
+  di Cache API browser (`caches`, nama `rwv-glb-v1`) — buka kedua dst. membaca
+  dari cache lokal, tanpa jaringan. Kuncinya URL model (per versi/file):
+  model baru dari auto-update punya URL berbeda, jadi otomatis terunduh dan
+  mengisi cache baru; yang lama mengendap sampai browser menghapus sendiri.
+  Cache gagal (mode privat, storage penuh) → fallback unduhan biasa, tanpa
+  error. CATATAN: putaran pertama tetap mengunduh (mengisi cache); yang
+  hilang adalah unduhan ulang pada pembukaan berikutnya.
 - **Performa: "3D berat saat navigasi" di mode presentasi (model besar).**
   Laporan: semua gerakan patah-patah, sendat sesaat berulang, terasa juga saat
   klik/membuka panel. Enam penyetelan di `lib/showcase/engine.ts`:

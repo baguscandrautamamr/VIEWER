@@ -271,10 +271,14 @@ test('resumed indexed material groups keep original colors and index offsets', (
   assert.deepEqual(Array.from(colors.slice(16, 20)), [0, 255, 0, 255]);
 });
 
-// --- Mode statis & kotak section -------------------------------------------
+// --- Kotak section ----------------------------------------------------------
 
 function sectionHarness() {
   const engine = Object.create(ShowcaseEngine.prototype);
+  engine.records = new Map();
+  engine.listeners = new Map();
+  engine.highlighted = new Set();
+  engine.style = 'mono';
   engine.bounds = { min: [-10, -10, -10], max: [10, 10, 10] };
   engine.sectionOn = false;
   engine.sectionClip = { xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
@@ -312,26 +316,40 @@ test('section box frame follows the clip sliders and matches the cutting planes'
   assert.equal(engine.sectionBox.visible, false);
 });
 
-test('static mode freezes the camera: controls off, keyboard ignored, pose kept', () => {
+// --- Marker seleksi (gaya kotak penanda Mode teknis) ------------------------
+
+function markerHarness() {
   const engine = sectionHarness();
-  const events = [];
-  engine.mode = 'orbit';
-  engine.controls = { enableRotate: true, autoRotate: false, enabled: true, target: new THREE.Vector3() };
-  engine.camera = new THREE.PerspectiveCamera();
-  engine.camera.position.set(30, 20, 30);
-  engine.emit = (ev) => events.push(ev);
-  engine.setMode('static');
-  assert.equal(engine.mode, 'static');
-  assert.equal(engine.controls.enabled, false, 'orbit controls are locked');
-  assert.ok(events.includes('mode'), 'mode event emitted');
-  // Keyboard tidak menggerakkan kamera apa pun di mode statis.
-  engine.keys = new Set(['w']);
-  const before = engine.camera.position.clone();
-  engine.stepKeys(0.016);
-  assert.deepEqual(engine.camera.position.toArray(), before.toArray());
-  // Kembali ke orbit: kontrol menyala lagi, kamera lanjut dari posisi statis.
-  engine.setMode('orbit');
-  assert.equal(engine.mode, 'orbit');
-  assert.equal(engine.controls.enabled, true);
-  assert.ok(engine.camera.position.distanceTo(before) < 1e-6, 'position preserved');
+  engine.selectedGid = null;
+  engine.camera = new THREE.PerspectiveCamera(50, 1.5, 0.1, 5000);
+  return engine;
+}
+
+test('selection marker box wraps the selected element and follows its bounds', () => {
+  const engine = markerHarness();
+  // Elemen "dinding" 10×3×1 di sekitar origin.
+  engine.records.set('wall-1', {
+    gid: 'wall-1', name: 'Dinding', rawName: null, category: 'Walls', categoryLabel: 'Dinding',
+    discipline: 'architecture', min: [-5, 0, -0.5], max: [5, 3, 0.5],
+    center: [0, 1.5, 0], size: [10, 3, 1], radius: 5.2, meshCount: 1, eid: 0,
+    ranges: [], hasRealName: true, sheer: false, embeddedName: null, embeddedCategory: null,
+  });
+  engine.select('wall-1');
+  assert.ok(engine.selBox, 'marker box is created on selection');
+  assert.equal(engine.selBox.visible, true);
+  const attr = engine.selBox.geometry.getAttribute('position');
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  for (let i = 0; i < attr.count; i++) {
+    min.min(new THREE.Vector3(attr.getX(i), attr.getY(i), attr.getZ(i)));
+    max.max(new THREE.Vector3(attr.getX(i), attr.getY(i), attr.getZ(i)));
+  }
+  // Elemen dilebarkan sedikit agar kotak tidak menempel permukaan (shrink).
+  const sh = 0.02;
+  assert.ok(Math.abs(min.x - (-5 - sh * 10)) < 1e-3, 'marker spans the element X');
+  assert.ok(Math.abs(max.y - (3 + sh * 3)) < 1e-3, 'marker spans the element Y');
+  assert.ok(Math.abs(min.z - (-0.5 - sh * 1)) < 1e-3, 'marker spans the element Z');
+  // Batal pilih: kotak hilang.
+  engine.select(null);
+  assert.equal(engine.selBox.visible, false);
 });

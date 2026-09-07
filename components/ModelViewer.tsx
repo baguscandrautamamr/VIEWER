@@ -154,6 +154,12 @@ export default function ModelViewer({
   // state untuk UI.
   const speedMultRef = useRef(1);
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
+  // Render on-demand (mode teknis): frame hanya digambar saat ada perubahan.
+  // needsRenderRef di-set oleh pembaruan non-kamera (warna, visibilitas,
+  // markup, section, dsb.) — lihat needsRender() di bawah.
+  const needsRenderRef = useRef(true);
+  const renderedCamPosRef = useRef(new THREE.Vector3(Infinity, Infinity, Infinity));
+  const renderedCamTargetRef = useRef(new THREE.Vector3(Infinity, Infinity, Infinity));
   // Navigasi keyboard di mode 3D biasa (orbit): W/S maju-mundur, A/D kiri-kanan,
   // Q naik, E turun — kamera & target OrbitControls digeser bersama (fly-through).
   const orbitKeysRef = useRef({ f: false, b: false, l: false, r: false, up: false, down: false });
@@ -304,6 +310,7 @@ export default function ModelViewer({
       const color = BG_COLORS[bgModeRef.current];
       scene.background = color === null ? null : new THREE.Color(color);
     }
+    needsRender();
   }
 
   function changeBrightness(v: number) {
@@ -528,13 +535,23 @@ export default function ModelViewer({
     camera.position.set(10, 10, 10);
     cameraRef.current = camera;
 
+    // Pembanding posisi untuk render on-demand (lokal ke effect ini).
+    const renderedCamPos = renderedCamPosRef.current;
+    const renderedCamTarget = renderedCamTargetRef.current;
+    const tmpRenderDir = new THREE.Vector3();
+    const tmpRenderPos = new THREE.Vector3();
+    renderedCamPos.set(Infinity, Infinity, Infinity);
+
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
       preserveDrawingBuffer: true,
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // Pixel ratio dibatasi 1,5: devicePixelRatio penuh di layar retina (2–3)
+    // berarti 4–9× piksel yang harus di-shading tiap frame — penyebab utama
+    // "berat saat navigasi" pada model besar. Tampilan tetap tajam.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.localClippingEnabled = true;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -900,7 +917,23 @@ export default function ModelViewer({
         controls.update();
       }
       updateOverlays();
-      renderer.render(scene, camera);
+      // Render on-demand: mode teknis dulu menggambar 60×/detik tanpa henti
+      // walaupun tidak ada yang berubah — di model besar itu GPU bekerja penuh
+      // terus-menerus. Sekarang frame hanya digambar kalau kamera/controls
+      // berubah, animasi berjalan, atau ada yang menandai needsRender().
+      const moving =
+        walkingRef.current ||
+        flyRef.current !== null ||
+        !camera.position.equals(renderedCamPos) ||
+        !controls.target.equals(renderedCamTarget);
+      if (moving || needsRenderRef.current) {
+        needsRenderRef.current = false;
+        camera.getWorldDirection(tmpRenderDir);
+        camera.getWorldPosition(tmpRenderPos);
+        renderer.render(scene, camera);
+        renderedCamPos.copy(camera.position);
+        renderedCamTarget.copy(controls.target);
+      }
     }
     animate();
 
@@ -908,6 +941,7 @@ export default function ModelViewer({
       camera.aspect = container.clientWidth / container.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
+      needsRenderRef.current = true;
     }
     const resizeObserver = new ResizeObserver(() => handleResize());
     resizeObserver.observe(container);
@@ -1009,6 +1043,14 @@ export default function ModelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraPreset]);
 
+  // Render on-demand: tandai bahwa frame berikutnya harus digambar ulang.
+  // Dipanggil dari semua pembaruan NON-kamera (warna, visibilitas, section,
+  // markup, ukur, seleksi). Perubahan kamera terdeteksi sendiri di animate
+  // loop dengan membandingkan posisi/target.
+  function needsRender() {
+    needsRenderRef.current = true;
+  }
+
   function loadModel(scene: THREE.Scene, glbUrl: string, highlightIds: string[] = []) {
     setLoadState('loading');
     setUnmappedMeshes(0);
@@ -1052,6 +1094,7 @@ export default function ModelViewer({
         setHiddenIds(new Set());
         buildTree();
         setLoadState('ready');
+        needsRender();
         dracoLoader.dispose();
       },
       undefined,
@@ -1114,6 +1157,7 @@ export default function ModelViewer({
     if (!scene) return;
     if (!box || box.isEmpty()) {
       if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+      needsRender();
       return;
     }
     let helper = selectionBoxRef.current;
@@ -1131,6 +1175,7 @@ export default function ModelViewer({
       helper.box.copy(box);
     }
     helper.visible = true;
+    needsRender();
   }
 
   // Dipanggil setiap visibilitas berubah: kotak penanda ikut hilang kalau
@@ -1242,6 +1287,7 @@ export default function ModelViewer({
     pZmax.constant = hz * clip.zMax;
     pZmin.constant = hz * clip.zMin;
     renderer.clippingPlanes = sectionOn ? clipPlanesRef.current : [];
+    needsRender();
   }
 
   useEffect(() => {
@@ -1366,6 +1412,7 @@ export default function ModelViewer({
       if ((mesh.userData.globalId as string) === gid) restoreMesh(mesh);
       else dimMesh(mesh);
     });
+    needsRender();
   }
 
   function isolateByCategory(target: THREE.Mesh) {
@@ -1378,10 +1425,12 @@ export default function ModelViewer({
       if (categoryOf(mesh) === targetCat) restoreMesh(mesh);
       else dimMesh(mesh);
     });
+    needsRender();
   }
 
   function resetIsolation() {
     forEachMesh((mesh) => restoreMesh(mesh));
+    needsRender();
   }
 
   // "Kembalikan seperti semula" = warna manual kalau ada, baru material asli.
@@ -1413,6 +1462,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       if ((mesh.userData.globalId as string) === gid) mesh.material = mat!;
     });
+    needsRender();
     setSelected((cur) => (cur ? { ...cur, color } : cur));
   }
 
@@ -1425,6 +1475,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       if ((mesh.userData.globalId as string) === gid) restoreMesh(mesh);
     });
+    needsRender();
     mat.dispose();
     setSelected((cur) => (cur ? { ...cur, color: null } : cur));
   }
@@ -1461,8 +1512,10 @@ export default function ModelViewer({
     });
     const original = mesh.material;
     mesh.material = highlightMaterial;
+    needsRender();
     setTimeout(() => {
       mesh.material = original;
+      needsRender();
     }, HIGHLIGHT_DURATION_MS);
   }
 
@@ -1514,6 +1567,7 @@ export default function ModelViewer({
       setMeasureDist(null);
       setMeasureDelta(null);
     }
+    needsRender();
   }
 
   function clearMeasure() {
@@ -1531,6 +1585,7 @@ export default function ModelViewer({
     measurePtsRef.current = [];
     setMeasureDist(null);
     setMeasureDelta(null);
+    needsRender();
   }
 
   // --- Selection Tree callbacks ---
@@ -1569,6 +1624,7 @@ export default function ModelViewer({
     forEachMeshOfGid(gid, (mesh) => {
       mesh.visible = visible;
     });
+    needsRender();
     syncSelectionBox();
     setHiddenIds((prev) => {
       const next = new Set(prev);
@@ -1582,6 +1638,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       if ((categoryOf(mesh) ?? DEFAULT_CATEGORY) === cat) mesh.visible = visible;
     });
+    needsRender();
     syncSelectionBox();
     setHiddenCategories((prev) => {
       const next = new Set(prev);
@@ -1595,6 +1652,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       mesh.visible = true;
     });
+    needsRender();
     syncSelectionBox();
     setHiddenCategories(new Set());
     setHiddenIds(new Set());
@@ -1612,6 +1670,7 @@ export default function ModelViewer({
     forEachMesh((mesh) => {
       mesh.visible = false;
     });
+    needsRender();
     syncSelectionBox();
     setHiddenCategories(new Set(treeData.map((c) => c.category)));
     setHiddenIds(new Set());

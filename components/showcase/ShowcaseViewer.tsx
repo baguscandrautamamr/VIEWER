@@ -324,7 +324,8 @@ export default function ShowcaseViewer({
     }
   }, [editorStops, savedStops, projectId]);
 
-  // Terapkan potongan model (section box) ke mesin tiap kali berubah.
+  // Terapkan potongan model (section box) ke mesin tiap kali berubah. Di
+  // mesin, potongan hidup selama ada slider < 1 — panel boleh tertutup.
   useEffect(() => {
     engineRef.current?.setSection(sectionOn, clip);
   }, [sectionOn, clip]);
@@ -811,8 +812,19 @@ export default function ShowcaseViewer({
       } else if (k === 'r') {
         resetView();
       } else if (k === 's') {
-        setSectionOn((v) => !v);
-        setSectionOpen((v) => !v);
+        // Sama seperti pill: kalau potongan belum ada, mulai; kalau sedang
+        // ada dan panel terbuka, matikan (model utuh); kalau ada dan panel
+        // tertutup, buka panelnya saja.
+        if (engine.sectionOn && sectionOpen) {
+          setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+          setSectionOn(false);
+          setSectionOpen(false);
+          resetView();
+        } else if (engine.sectionOn) setSectionOpen(true);
+        else {
+          setSectionOn(true);
+          setSectionOpen(true);
+        }
       } else if (k === '/' ) {
         e.preventDefault();
         setNavOpen(true);
@@ -820,7 +832,7 @@ export default function ShowcaseViewer({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navOpen, side, tourIndex, markupOn, measureOn, exitTour, startTour, resetView]);
+  }, [navOpen, side, tourIndex, markupOn, measureOn, sectionOpen, exitTour, startTour, resetView]);
 
   // ---------------------------------------------------------------- render
   const hoveredEl = hover ? engineRef.current?.getElement(hover.gid) ?? null : null;
@@ -1014,15 +1026,29 @@ export default function ShowcaseViewer({
               {Icons.spark}
               {s.assistant}
             </button>
-            {/* Pill section: nyalakan/matikan potongan SEKALIGUS buka/tutup
-                panelnya — satu klik dua hal, biar pertama kali langsung ada
-                slidernya. Setelah itu ✕ di panel hanya menutup panel. */}
+            {/* Pill section: buka/tutup PANEL slider. Potongan sendiri hidup
+                saat ada slider < 1 — jadi menutup pill/panel tidak pernah
+                mengubah bentuk model; hanya "Turn off section"/reset yang
+                mengembalikan model utuh. Menyala saat potongan hidup. */}
             <button
               type="button"
               className={`sc-pill ${sectionOn ? 'is-on' : ''}`}
               onClick={() => {
-                setSectionOn((v) => !v);
-                setSectionOpen((v) => !v);
+                if (sectionOn) {
+                  // Potongan hidup: toggol panel saja; kalau panel sudah
+                  // terbuka, klik kedua = matikan potongan (bentuk semula).
+                  if (sectionOpen) {
+                    setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+                    setSectionOn(false);
+                    setSectionOpen(false);
+                    resetView();
+                  } else setSectionOpen(true);
+                } else {
+                  // Belum ada potongan: mulai dengan tepi penuh + panel.
+                  setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+                  setSectionOn(true);
+                  setSectionOpen(true);
+                }
               }}
               title={s.section}
             >

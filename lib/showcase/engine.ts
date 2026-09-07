@@ -1356,8 +1356,18 @@ export class ShowcaseEngine {
   // Pasang bidang potong ke material model (bukan renderer global), supaya
   // lantai & grid di bawah tetap utuh. Dipanggil saat model selesai digabung
   // dan tiap kali nilai potongan berubah.
+  //
+  // Potongan AKTIF selama ada slider yang bukan 1 (memang ada bagian yang
+  // dipotong), TIDAK tergantung panel terbuka/tutup. `sectionOn` hanyalah
+  // saklar besar (reset/"Matikan potongan") — jadi menutup panel atau
+  // menyalakannya lagi tidak pernah mengubah bentuk model.
+  private clippingLive() {
+    const c = this.sectionClip;
+    return c.xMin < 1 || c.xMax < 1 || c.yMin < 1 || c.yMax < 1 || c.zMin < 1 || c.zMax < 1;
+  }
+
   private refreshClipping() {
-    const planes = this.sectionOn ? this.clipPlanes : [];
+    const planes = this.sectionOn && this.clippingLive() ? this.clipPlanes : [];
     const half = this.bounds.max.map((v, i) => (v - this.bounds.min[i]) / 2 || 1) as [number, number, number];
     const [hx, hy, hz] = half;
     const c = this.sectionClip;
@@ -1376,11 +1386,11 @@ export class ShowcaseEngine {
     this.renderDirty = true;
   }
 
-  // Gambar ulang bingkai kotak potong mengikuti 6 slider. Tampil hanya saat
-  // section aktif. depthTest=false supaya kotaknya tetap terlihat walau di
-  // balik dinding (sama seperti kotak penanda elemen di Mode teknis).
+  // Gambar ulang bingkai kotak potong mengikuti 6 slider. Tampil saat
+  // potongan hidup (panel boleh saja tertutup — sama seperti bidangnya).
+  // depthTest=false supaya kotaknya tetap terlihat walau di balik dinding.
   private updateSectionBox() {
-    if (!this.sectionOn) {
+    if (!this.sectionOn || !this.clippingLive()) {
       if (this.sectionBox) this.sectionBox.visible = false;
       return;
     }
@@ -1428,8 +1438,16 @@ export class ShowcaseEngine {
   }
 
   setSection(on: boolean, clip: SectionClip) {
-    this.sectionOn = on;
-    this.sectionClip = clip;
+    // Kalau potongan SUDAH hidup lalu `on` jadi false tanpa clip di-reset ke
+    // tepi penuh, anggap hanya saklar panel — potongan dipertahankan. Reset
+    // yang sebenarnya selalu mengirim clip penuh (semua = 1).
+    const full = clip.xMin >= 1 && clip.xMax >= 1 && clip.yMin >= 1 && clip.yMax >= 1 && clip.zMin >= 1 && clip.zMax >= 1;
+    if (this.sectionOn && !on && !full) {
+      this.sectionClip = clip; // simpan posisi slider, potongan tetap jalan
+    } else {
+      this.sectionOn = on;
+      this.sectionClip = clip;
+    }
     this.refreshClipping();
   }
 

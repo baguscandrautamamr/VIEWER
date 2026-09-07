@@ -107,6 +107,17 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Potongan menempel di model, bukan di panel (versi final).** Laporan:
+  setelah Y− dipotong, menyalakan-mematikan pill Section membuat piling kembali
+  utuh padahal panelnya saja yang ditutup. Diperbaiki dua sisi: (a) di engine,
+  potongan hidup selama ADA slider < 1 (`clippingLive()`), bukan mengikuti
+  saklar panel; `setSection` menolak mematikan potongan kalau `on`=false tapi
+  clip masih terpotong (itu artinya cuma panel yang ditutup); (b) di UI,
+  `sectionOn` (potongan) dan `sectionOpen` (panel) benar-benar terpisah — ✕ dan
+  pill hanya membuka/menutup panel; klik pill kedua saat panel terbuka =
+  matikan potongan + resetView. Jadi: piling terpotong TETAP terpotong apapun
+  yang terjadi pada panel; hanya "Turn off section" / reset view yang
+  mengembalikan model utuh.
 - **Fix akar masalah section: satu state untuk dua arti.** Laporan pertama
   "menutup panel mematikan potongan" ternyata persis itu: panel section
   dirender bersyarat `sectionOn`, jadi ✕ yang harusnya cuma menutup panel

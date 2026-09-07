@@ -30,9 +30,7 @@ export interface CameraPose {
   target: [number, number, number];
 }
 
-// 'static' = kamera beku seperti Mode teknis: hanya klik memilih, tidak ada
-// putaran/jalan — dipakai untuk memotret tampilan yang sama persis berulang.
-export type ViewMode = 'orbit' | 'walk' | 'static';
+export type ViewMode = 'orbit' | 'walk';
 
 export interface TourStop {
   id: string;

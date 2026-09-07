@@ -289,6 +289,11 @@ export class ShowcaseEngine {
   // garis tepi + sudut tebal, mengikuti posisi 6 slider. Dipasang ke scene
   // (bukan modelGroup) supaya luput dari raycast pemilihan.
   private sectionBox: THREE.LineSegments | null = null;
+  // Kotak penanda elemen terpilih — gaya Mode teknis (Navisworks): model lain
+  // tetap utuh, elemen terpilih dibingkai. depthTest=false supaya terlihat
+  // walau di balik dinding.
+  private selBox: THREE.LineSegments | null = null;
+  private selBoxGid: string | null = null;
   private cMono = u8(COLORS.mono);
   private cMonoGlass = u8(COLORS.monoGlass);
   private cHighlight = u8(COLORS.highlight);
@@ -435,6 +440,27 @@ export class ShowcaseEngine {
   }
 
   // ------------------------------------------------------------------ load
+  // Cache GLB di Cache API browser: setiap kali halaman presentasi dibuka,
+  // GLB tidak diunduh ulang dari server (model besar = puluhan-detik-an).
+  // Kunci cache = URL model (per versi/file, jadi versi baru otomatis unduh
+  // ulang; yang lama tinggal mengendap sampai browser menghapus sendiri).
+  private static readonly CACHE_NAME = 'rwv-glb-v1';
+  private async cachedUrl(url: string): Promise<Response | null> {
+    try {
+      if (typeof caches === 'undefined') return null;
+      const cache = await caches.open(ShowcaseEngine.CACHE_NAME);
+      const hit = await cache.match(url);
+      if (hit) return hit;
+      const res = await fetch(url);
+      if (!res.ok || !res.body) return null;
+      // Klon respons: satu untuk dipakai sekarang, satu disimpan di cache.
+      await cache.put(url, res.clone());
+      return res;
+    } catch {
+      return null; // cache gagal (storage penuh, mode privat) — unduh biasa
+    }
+  }
+
   load(url: string) {
     const token = ++this.loadToken;
     this.releaseMergeSources();
@@ -444,9 +470,9 @@ export class ShowcaseEngine {
     draco.setDecoderPath('/draco/');
     loader.setDRACOLoader(draco);
     this.emit('progress', { value: 0, stage: 'download' });
-    loader.load(
-      url,
-      (gltf) => {
+    const parse = (data: ArrayBuffer) => {
+      if (this.disposed || token !== this.loadToken) return;
+      loader.parse(data, '', (gltf) => {
         draco.dispose();
         if (this.disposed || token !== this.loadToken) {
           this.disposeSource(gltf.scene, true);
@@ -461,21 +487,92 @@ export class ShowcaseEngine {
           // Viewer gabungan memakai warna vertex, tidak pernah tekstur sumber.
           this.disposeSource(gltf.scene, false);
         }
-      },
-      (ev) => {
+      });
+    };
+    const onBytes = (loaded: number, total?: number) => {
+      if (this.disposed || token !== this.loadToken) return;
+      if (total && total > 0) this.emit('progress', { value: (loaded / total) * 55, stage: 'download', bytes: loaded, total });
+      else this.emit('progress', { value: 0, stage: 'download', bytes: loaded });
+    };
+    this.cachedUrl(url)
+      .then((cached) => {
         if (this.disposed || token !== this.loadToken) return;
-        // Tanpa Content-Length (stream dari Drive/Storage) persentase tidak
-        // bisa dihitung — kirim jumlah byte supaya UI menampilkan MB.
-        if (ev.total > 0) this.emit('progress', { value: (ev.loaded / ev.total) * 55, stage: 'download', bytes: ev.loaded, total: ev.total });
-        else this.emit('progress', { value: 0, stage: 'download', bytes: ev.loaded });
-      },
-      (err) => {
-        draco.dispose();
-        if (this.disposed || token !== this.loadToken) return;
-        console.error('Gagal load GLB:', url, err);
-        this.emit('error', 'load');
-      }
-    );
+        // Cache kena: baca dari respons tersimpan — tanpa jaringan sama sekali.
+        if (cached) {
+          const total = Number(cached.headers.get('Content-Length')) || undefined;
+          const reader = cached.body?.getReader();
+          if (!reader) {
+            loader.load(
+              url,
+              () => {},
+              undefined,
+              (err) => {
+                draco.dispose();
+                if (this.disposed || token !== this.loadToken) return;
+                console.error('Gagal load GLB:', url, err);
+                this.emit('error', 'load');
+              }
+            );
+            return;
+          }
+          const chunks: Uint8Array[] = [];
+          let received = 0;
+          const pump = (): Promise<void> =>
+            reader.read().then(({ done, value }) => {
+              if (this.disposed || token !== this.loadToken) {
+                reader.cancel().catch(() => {});
+                return;
+              }
+              if (done) {
+                const buf = new Uint8Array(received);
+                let off = 0;
+                for (const c of chunks) {
+                  buf.set(c, off);
+                  off += c.length;
+                }
+                onBytes(received, total ?? received);
+                parse(buf.buffer);
+                return;
+              }
+              chunks.push(value);
+              received += value.length;
+              onBytes(received, total);
+              return pump();
+            });
+          pump();
+          return;
+        }
+        // Tidak ada cache: unduh lewat loader biasa (yang sekalian mengisi
+        // cache lewat cachedUrl saat fetch-nya selesai di panggilan berikutnya).
+        loader.load(
+          url,
+          () => {},
+          (ev) => {
+            if (ev.total > 0) onBytes(ev.loaded, ev.total);
+            else onBytes(ev.loaded);
+          },
+          (err) => {
+            draco.dispose();
+            if (this.disposed || token !== this.loadToken) return;
+            console.error('Gagal load GLB:', url, err);
+            this.emit('error', 'load');
+          }
+        );
+      })
+      .catch(() => {
+        // Jalur cache gagal total — fallback ke unduhan biasa.
+        loader.load(
+          url,
+          () => {},
+          undefined,
+          (err) => {
+            draco.dispose();
+            if (this.disposed || token !== this.loadToken) return;
+            console.error('Gagal load GLB:', url, err);
+            this.emit('error', 'load');
+          }
+        );
+      });
   }
 
   private installModel(root: THREE.Object3D, parser: { associations: Map<unknown, unknown>; json: unknown }, token: number) {
@@ -1046,6 +1143,8 @@ export class ShowcaseEngine {
     this.minimapRects = [];
     this.clipMaterials = [];
     if (this.sectionBox) this.sectionBox.visible = false;
+    if (this.selBox) this.selBox.visible = false;
+    this.selBoxGid = null;
   }
 
   // Geometri sumber GLTF dilepas saat model diganti/dibersihkan. Sub-geometri
@@ -1438,7 +1537,53 @@ export class ShowcaseEngine {
     if (prev) changed.push(prev);
     if (gid) changed.push(gid);
     this.repaint(changed);
+    this.updateSelBox();
     this.emit('select', gid);
+  }
+
+  // Bingkai kotak di sekeliling elemen terpilih (gaya Mode teknis). Dipasang
+  // ke scene — bukan model — supaya luput dari raycast & clipping; modelnya
+  // berupa geometri gabungan, jadi tidak ada mesh per elemen untuk dilampiri.
+  private updateSelBox() {
+    const gid = this.selectedGid;
+    this.selBoxGid = gid;
+    if (!gid) {
+      if (this.selBox) this.selBox.visible = false;
+      return;
+    }
+    const rec = this.records.get(gid);
+    if (!rec || !Number.isFinite(rec.min[0])) {
+      if (this.selBox) this.selBox.visible = false;
+      return;
+    }
+    // Lebarkan sedikit supaya kotak tidak menempel permukaan elemen.
+    const sh = 0.02;
+    const x0 = rec.min[0] - rec.size[0] * sh;
+    const x1 = rec.max[0] + rec.size[0] * sh;
+    const y0 = rec.min[1] - rec.size[1] * sh;
+    const y1 = rec.max[1] + rec.size[1] * sh;
+    const z0 = rec.min[2] - rec.size[2] * sh;
+    const z1 = rec.max[2] + rec.size[2] * sh;
+    const v: number[] = [];
+    const edge = (a: [number, number, number], b: [number, number, number]) => v.push(...a, ...b);
+    const xIn = [x0, x1], yIn = [y0, y1], zIn = [z0, z1];
+    for (const x of xIn) for (const y of yIn) edge([x, y, z0], [x, y, z1]);
+    for (const y of yIn) for (const z of zIn) edge([x0, y, z], [x1, y, z]);
+    for (const x of xIn) for (const z of zIn) edge([x, y0, z], [x, y1, z]);
+    if (!this.selBox) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24 * 3), 3));
+      const mat = new THREE.LineBasicMaterial({ color: COLORS.selected, transparent: true, opacity: 0.95, depthTest: false });
+      this.selBox = new THREE.LineSegments(geo, mat);
+      this.selBox.renderOrder = 997;
+      this.selBox.frustumCulled = false;
+      this.scene.add(this.selBox);
+    }
+    const attr = this.selBox.geometry.getAttribute('position') as THREE.BufferAttribute;
+    (attr.array as Float32Array).set(v);
+    attr.needsUpdate = true;
+    this.selBox.visible = true;
+    this.renderDirty = true;
   }
   get selected() {
     return this.selectedGid;
@@ -1564,20 +1709,6 @@ export class ShowcaseEngine {
       this.mode = 'walk';
       if (prev !== 'walk') this.syncYawPitchFromCamera();
       this.flyTo(pose, opts.dur ?? 1.0);
-    } else if (mode === 'static') {
-      // Kamera beku: kunci putaran & zoom di OrbitControls, posisi sekarang
-      // dipertahankan (atau terbang ke pose yang diberikan). Klik tetap bisa
-      // memilih elemen — hanya navigasinya yang dimatikan.
-      this.controls.enabled = false;
-      this.mode = 'static';
-      if (prev === 'walk') {
-        // Dari mode jalan: angkat sedikit supaya pusat putar masuk akal kalau
-        // nanti kembali ke orbit, dan target = titik yang sedang dilihat.
-        const pose = opts.pose ?? this.orbitPoseFromWalk();
-        this.setPoseImmediate(pose);
-      } else if (opts.pose) {
-        this.setPoseImmediate(opts.pose);
-      }
     } else {
       this.mode = 'orbit';
       this.controls.enabled = true;
@@ -1775,11 +1906,6 @@ export class ShowcaseEngine {
       }
       return;
     }
-    // Mode statis: kamera beku, jadi tooltip hover tidak perlu dihitung.
-    if (this.mode === 'static') {
-      if (this.hoverGid) this.setHover(null, 0, 0);
-      return;
-    }
     if (this.mode === 'orbit' && !this.tween && !this.merge) {
       const now = performance.now();
       // Hover menyapu kotak batas puluhan ribu elemen — 6–7×/detik cukup
@@ -1855,7 +1981,6 @@ export class ShowcaseEngine {
 
   private stepKeys(dt: number) {
     if (this.keys.size === 0) return;
-    if (this.mode === 'static') return; // kamera beku — keyboard tidak menggerakkan apa pun
     const run = this.keys.has('shift') ? 2.6 : 1;
     const v = this.walkSpeed * run * dt;
     const fwd = (this.keys.has('w') || this.keys.has('arrowup') ? 1 : 0) - (this.keys.has('s') || this.keys.has('arrowdown') ? 1 : 0);
@@ -2396,6 +2521,10 @@ export class ShowcaseEngine {
     (this.sectionBox?.material as THREE.Material | undefined)?.dispose();
     this.sectionBox?.removeFromParent();
     this.sectionBox = null;
+    this.selBox?.geometry.dispose();
+    (this.selBox?.material as THREE.Material | undefined)?.dispose();
+    this.selBox?.removeFromParent();
+    this.selBox = null;
     this.controls.dispose();
     this.clearModel();
     this.ground?.geometry.dispose();

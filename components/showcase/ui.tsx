@@ -133,4 +133,7 @@ export const Icons = {
   send: <I d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />,
   eye: <I d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0" />,
   slice: <I d="M5 3h14v18H5zM5 12h14M9 3v18M15 3v18" />,
+  // Penggaris miring (ukur jarak) & pena coret (markup).
+  measure: <I d="M3 17.2L17.2 3l3.8 3.8L6.8 21 3 17.2zM7.5 12.8l1.8 1.8M10.4 9.9l1.8 1.8M13.3 7l1.8 1.8M16.2 4.1L18 5.9" />,
+  pen: <I d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />,
 };

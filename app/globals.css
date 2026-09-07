@@ -261,6 +261,10 @@ body {
   padding: 6px 12px; font-size: 11.5px; display: flex; gap: 8px; align-items: center;
   pointer-events: none; animation: sc-fade 0.4s ease-out; max-width: 90%;
 }
+/* Tombol di dalam hint (mis. hapus ukur) — hint induknya tembus klik,
+   tombolnya sendiri harus bisa diklik. */
+.sc-hint-btn { pointer-events: auto; cursor: pointer; border: 1px solid rgba(255,255,255,0.18); border-radius: 6px; padding: 2px 8px; font-size: 10.5px; color: rgba(255,255,255,0.85); background: rgba(0,0,0,0.25); }
+.sc-hint-btn:hover { border-color: rgba(201,245,94,0.5); color: #fff; }
 .sc-crosshair { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; transform: translate(-50%,-50%); z-index: 11; pointer-events: none; color: rgba(255,255,255,0.9); filter: drop-shadow(0 0 2px rgba(0,0,0,0.6)); }
 .sc-lookat { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -36px); z-index: 12; pointer-events: none; max-width: 70%; }
 .sc-hover { position: absolute; z-index: 12; pointer-events: none; padding: 3px 8px; font-size: 11px; white-space: nowrap; transform: translate(14px, 16px); max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
@@ -277,6 +281,15 @@ body {
 
 .sc-modal-backdrop { position: absolute; inset: 0; z-index: 35; background: rgba(10, 16, 14, 0.45); backdrop-filter: blur(3px); display: grid; place-items: center; animation: sc-fade 0.15s ease-out; }
 .sc-modal { padding: 16px; max-height: 86%; }
+/* Kolom input & textarea panel presentasi (editor tur, dsb.). Tanpa aturan
+   ini input memakai style browser: background PUTIH dengan teks putih yang
+   diwarisi panel — tidak terlihat. */
+.sc-field { display: block; width: 100%; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12); color: #fff; font-size: 12.5px; outline: none; }
+.sc-field:focus { border-color: rgba(201,245,94,0.5); }
+.sc-field::placeholder { color: rgba(255,255,255,0.35); }
+/* Label hasil ukur (mode presentasi): satu baris menempel di tengah dua titik,
+   mengikuti kamera. Diposkan engine langsung via transform tiap frame. */
+.sc-measure-label { position: absolute; left: 0; top: 0; z-index: 22; display: none; padding: 3px 9px; border-radius: 7px; background: rgba(10,16,12,0.85); border: 1px solid rgba(201,245,94,0.4); color: #e8f7c5; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: nowrap; pointer-events: none; }
 .sc-search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); }
 .sc-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 13px; color: #fff; }
 .sc-search input::placeholder { color: rgba(255,255,255,0.35); }

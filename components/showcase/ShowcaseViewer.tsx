@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { locales, type Locale } from '@/lib/i18n';
 import { subscribeToProjectUpdates, unsubscribe } from '@/lib/realtime';
+import MarkupOverlay from '@/components/MarkupOverlay';
 import { DISCIPLINE_ORDER, type Discipline } from '@/lib/showcase/disciplines';
 import { fetchElementNames } from '@/lib/showcase/elementNames';
 import { ShowcaseEngine, type EngineStats, type HoverInfo, type LoadProgress, type Style, type SectionClip } from '@/lib/showcase/engine';
@@ -88,6 +89,10 @@ export default function ShowcaseViewer({
   // Potongan (section box): 6 bidang X/Y/Z ±, nilai 0..1 (1 = tepi model).
   const [sectionOn, setSectionOn] = useState(false);
   const [clip, setClip] = useState<SectionClip>({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+  // Tool ukur & layer coret-coret — perilaku sama dengan Mode teknis: ukur
+  // pasang 2 titik pada model, coret membekukan navigasi supaya gambar pas.
+  const [measureOn, setMeasureOn] = useState(false);
+  const [markupOn, setMarkupOn] = useState(false);
   const [planActive, setPlanActive] = useState(false);
   const [side, setSide] = useState<SidePanel>('none');
   const [navOpen, setNavOpen] = useState(false);
@@ -279,6 +284,16 @@ export default function ShowcaseViewer({
   useEffect(() => {
     engineRef.current?.setSection(sectionOn, clip);
   }, [sectionOn, clip]);
+
+  // Sinkronkan tool ukur & markup ke mesin. Dua-duanya memakai klik pada
+  // model, jadi menyalakan satu mematikan yang lain.
+  useEffect(() => {
+    engineRef.current?.setMeasure(measureOn && !markupOn);
+  }, [measureOn, markupOn]);
+  useEffect(() => {
+    engineRef.current?.setInputLocked(markupOn);
+  }, [markupOn]);
+  useEffect(() => () => engineRef.current?.setInputLocked(false), []);
 
   // Area yang tertutup panel — label 3D, tooltip, dan label seleksi menjauhinya.
   useEffect(() => {
@@ -487,6 +502,8 @@ export default function ShowcaseViewer({
     // Reset potongan (section box) ke tepi penuh.
     setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
     setSectionOn(false);
+    setMeasureOn(false);
+    setMarkupOn(false);
   }, [exitTour]);
 
   const onViewpoint = useCallback(
@@ -726,7 +743,9 @@ export default function ShowcaseViewer({
       if (!engine) return;
       const k = e.key.toLowerCase();
       if (k === 'escape') {
-        if (navOpen) setNavOpen(false);
+        if (markupOn) setMarkupOn(false);
+        else if (measureOn) setMeasureOn(false);
+        else if (navOpen) setNavOpen(false);
         else if (side !== 'none') setSide('none');
         else if (tourIndex >= 0) exitTour();
         else engine.select(null);
@@ -755,7 +774,7 @@ export default function ShowcaseViewer({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navOpen, side, tourIndex, exitTour, startTour, resetView]);
+  }, [navOpen, side, tourIndex, markupOn, measureOn, exitTour, startTour, resetView]);
 
   // ---------------------------------------------------------------- render
   const hoveredEl = hover ? engineRef.current?.getElement(hover.gid) ?? null : null;
@@ -950,6 +969,30 @@ export default function ShowcaseViewer({
             <button type="button" className={`sc-pill ${sectionOn ? 'is-on' : ''}`} onClick={() => setSectionOn((v) => !v)} title={s.section}>
               {Icons.slice}
               {s.section}
+            </button>
+            <button
+              type="button"
+              className={`sc-pill ${measureOn ? 'is-on' : ''}`}
+              onClick={() => {
+                setMeasureOn((v) => !v);
+                setMarkupOn(false);
+              }}
+              title={s.measureHint}
+            >
+              {Icons.measure}
+              {s.measure}
+            </button>
+            <button
+              type="button"
+              className={`sc-pill ${markupOn ? 'is-on' : ''}`}
+              onClick={() => {
+                setMarkupOn((v) => !v);
+                setMeasureOn(false);
+              }}
+              title={s.markup}
+            >
+              {Icons.pen}
+              {s.markup}
             </button>
             {canEdit && (
               <button type="button" className={`sc-pill ${side === 'tour' ? 'is-on' : ''}`} onClick={() => setSide(side === 'tour' ? 'none' : 'tour')} title={s.tourEditTitle}>
@@ -1171,6 +1214,30 @@ export default function ShowcaseViewer({
       )}
 
       {toast && <Panel className="sc-toast">{toast}</Panel>}
+
+      {/* Hint tool ukur + tombol bantu (ulangi / hapus). Hasil ukurnya sendiri
+          digambar mesin langsung ke scene (marker + label DOM) — bukan state
+          React, lihat stepMeasure() di engine. */}
+      {measureOn && !markupOn && loadState === 'ready' && (
+        <Panel className="sc-hint">
+          <span className="text-[color:var(--sc-accent)]">{Icons.measure}</span>
+          <span>{s.measureHint}</span>
+          <button type="button" className="sc-hint-btn" onClick={() => engineRef.current?.clearMeasure()}>
+            {s.measureClear}
+          </button>
+          <button type="button" className="sc-hint-btn" onClick={() => setMeasureOn(false)} title={s.measure}>
+            ✕
+          </button>
+        </Panel>
+      )}
+
+      {/* Layer coret-coret (canvas overlay screen space). Saat aktif mesin
+          membekukan navigasi via setInputLocked supaya coretan tetap pas. */}
+      <MarkupOverlay
+        active={markupOn}
+        strings={locales[locale].markup}
+        getViewerCanvas={() => engineRef.current?.renderer.domElement ?? null}
+      />
 
       {loadState !== 'ready' && (
         <div className="sc-loading">

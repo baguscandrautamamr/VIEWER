@@ -107,6 +107,27 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Markup & ukur di mode presentasi** — dua tool andalan Mode teknis kini ada
+  juga di viewer presentasi (pill "Ukur" & "Coret" di dock).
+  - **Ukur**: klik 2 titik pada model → jarak + selisih per sumbu (Z = tinggi,
+    pemetaan Y-up GLB ⇄ Z-up Revit, sama dengan Mode teknis). Marker bola
+    diskalakan konstan 7 px di layar tiap frame (`stepMeasure`), label DOM
+    `.sc-measure-label` mengikuti titik tengah. Titik dunia diambil dari
+    `lastPickPoint` yang dicatat `pickNdc` saat kandidat terbaik ditemukan —
+    tanpa raycast kedua. Hint di tengah layar berisi tombol "Hapus ukur".
+  - **Coret (markup)**: komponen `MarkupOverlay` yang sama dengan Mode teknis
+    dipasang di ShowcaseViewer (pena/panah/teks, 5 warna, undo, simpan PNG).
+    Saat aktif mesin membekukan seluruh input via `setInputLocked()` baru —
+    drag, klik pilih, keyboard WASD, scroll — supaya coretan tetap pas dengan
+    tampilan (Mode teknis melakukan hal sama lewat `controls.enabled`).
+  - Dua tool saling meniadakan (sama-sama memakai klik model), dimatikan oleh
+    reset view dan Escape.
+- **Fix: input editor tur tak terlihat (putih atas putih).** Form "Save
+  current view" di Edit Tour memakai kelas `.sc-field` yang TIDAK PERNAH
+  didefinisikan di `globals.css` — browser memakai gaya defaultnya: teks
+  putih, latar putih. Kelas kini didefinisikan (latar gelap transparan, teks
+  putih, fokus hijau aksen). Pelajaran: kelas Tailwind-arbitrary aman asal
+  terpakai; kelas kustom WAJIB dicek ada definisi CSS-nya.
 - **Mode statis DIHAPUS** (dibuat pagi itu, diminta lepas sore itu juga).
   Pill ketiga, cabang `setMode('static')`, string i18n, dan test-nya dibuang
   semua. Alasan: tak terpakai dan menambah satu kondisi di tiap jalur mode.

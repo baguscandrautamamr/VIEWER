@@ -294,6 +294,13 @@ export class ShowcaseEngine {
   // walau di balik dinding.
   private selBox: THREE.LineSegments | null = null;
   private selBoxGid: string | null = null;
+  // Ukur jarak (gaya Mode teknis): 2 titik pada permukaan model + garis +
+  // label DOM yang mengikuti kamera. Titik = sphere yang diskalakan tiap frame
+  // supaya ukurannya konstan di layar (jebakan #6 di CATATAN.md).
+  private measureGroup: THREE.Group | null = null;
+  private measurePts: THREE.Vector3[] = [];
+  private measureLabel: HTMLDivElement | null = null;
+  measureActive = false;
   private cMono = u8(COLORS.mono);
   private cMonoGlass = u8(COLORS.monoGlass);
   private cHighlight = u8(COLORS.highlight);
@@ -1424,6 +1431,130 @@ export class ShowcaseEngine {
     this.refreshClipping();
   }
 
+  // ------------------------------------------------------------------ measure
+  // Nyala/matiannya tool ukur. Saat aktif, klik pada kanvas memasang titik
+  // ukur pada permukaan model (dari hasil pickNdc + titik tembusnya).
+  setMeasure(on: boolean) {
+    this.measureActive = on;
+    if (!on) this.clearMeasure();
+    this.renderDirty = true;
+  }
+
+  // Bekukan seluruh input (drag, klik pilih, keyboard, scroll) — dipakai saat
+  // layer markup aktif supaya coretan tetap pas dengan tampilan 3D di belakang
+  // (pola sama dengan Mode teknis yang mematikan OrbitControls).
+  private inputLocked = false;
+  setInputLocked(on: boolean) {
+    this.inputLocked = on;
+    this.controls.enabled = !on;
+    if (on) {
+      this.keys.clear();
+      this.drag = null;
+    }
+  }
+
+  clearMeasure() {
+    this.measurePts = [];
+    if (this.measureGroup) {
+      this.measureGroup.removeFromParent();
+      this.measureGroup.traverse((o) => {
+        const m = o as THREE.Mesh & { material?: THREE.Material };
+        (o as THREE.Mesh).geometry?.dispose?.();
+        m.material?.dispose?.();
+      });
+      this.measureGroup = null;
+    }
+    if (this.measureLabel) this.measureLabel.style.display = 'none';
+    this.renderDirty = true;
+  }
+
+  get measuring() {
+    return this.measureActive;
+  }
+
+  // Klik pemilihan diubah jadi titik ukur saat tool aktif; kembalikan true
+  // kalau klik sudah dikonsumsi (pemilihan elemen dilewati).
+  private addMeasurePointAt(gid: string | null, world: THREE.Vector3 | null): boolean {
+    if (!this.measureActive || !gid || !world) return this.measureActive;
+    this.measurePts.push(world.clone());
+    if (this.measurePts.length >= 2) this.measurePts = this.measurePts.slice(-2);
+    this.rebuildMeasureGroup();
+    return true;
+  }
+
+  private rebuildMeasureGroup() {
+    if (this.measureGroup) {
+      this.measureGroup.removeFromParent();
+      this.measureGroup.traverse((o) => {
+        const m = o as THREE.Mesh & { material?: THREE.Material };
+        (o as THREE.Mesh).geometry?.dispose?.();
+        m.material?.dispose?.();
+      });
+      this.measureGroup = null;
+    }
+    if (this.measurePts.length === 0) return;
+    const g = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: COLORS.selected, depthTest: false });
+    for (const p of this.measurePts) {
+      const marker = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 12), mat);
+      marker.userData.measureMarker = true;
+      marker.renderOrder = 999;
+      marker.position.copy(p);
+      marker.scale.setScalar(0.001); // diskalakan tiap frame di stepMeasure
+      g.add(marker);
+    }
+    if (this.measurePts.length === 2) {
+      const geo = new THREE.BufferGeometry().setFromPoints(this.measurePts);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: COLORS.selected, depthTest: false }));
+      line.renderOrder = 999;
+      g.add(line);
+    }
+    this.measureGroup = g;
+    this.scene.add(g);
+    this.renderDirty = true;
+  }
+
+  // Dipanggil tiap frame: skala titik konstan di layar + posisi label jarak.
+  private stepMeasure() {
+    const group = this.measureGroup;
+    if (!group) {
+      if (this.measureLabel) this.measureLabel.style.display = 'none';
+      return;
+    }
+    const h = this.container.clientHeight;
+    const tanHalf = Math.tan((this.camera.fov * Math.PI) / 360);
+    for (const c of group.children) {
+      if (!(c as THREE.Mesh).userData?.measureMarker) continue;
+      const dist = this.camera.position.distanceTo(c.position);
+      // Target 7 px di layar — sama dengan penanda ukur Mode teknis.
+      const r = (7 * tanHalf * dist) / (h / 2);
+      c.scale.setScalar(r);
+    }
+    if (this.measurePts.length === 2) {
+      if (!this.measureLabel) {
+        this.measureLabel = document.createElement('div');
+        this.measureLabel.className = 'sc-measure-label';
+        this.labelLayer.appendChild(this.measureLabel);
+      }
+      const mid = this.measurePts[0].clone().add(this.measurePts[1]).multiplyScalar(0.5);
+      const v = mid.project(this.camera);
+      const w = this.container.clientWidth;
+      const behind = v.z > 1 || v.z < -1;
+      this.measureLabel.style.display = behind ? 'none' : 'block';
+      if (!behind) {
+        // GLB Y-up, IFC/Revit Z-up: yang di Revit "Z (tinggi)" = sumbu y scene.
+        const d = this.measurePts[0].distanceTo(this.measurePts[1]);
+        const dx = Math.abs(this.measurePts[1].x - this.measurePts[0].x);
+        const dy = Math.abs(this.measurePts[1].z - this.measurePts[0].z);
+        const dz = Math.abs(this.measurePts[1].y - this.measurePts[0].y);
+        this.measureLabel.textContent = `${d.toFixed(2)} m  ·  X ${dx.toFixed(1)} / Y ${dy.toFixed(1)} / Z ${dz.toFixed(1)}`;
+        this.measureLabel.style.transform = `translate(-50%, -50%) translate(${((v.x + 1) * 0.5 * w).toFixed(0)}px, ${((1 - v.y) * 0.5 * h).toFixed(0)}px)`;
+      }
+    } else if (this.measureLabel) {
+      this.measureLabel.style.display = 'none';
+    }
+  }
+
   // ------------------------------------------------------------------ colors
   setStyle(style: Style) {
     this.style = style;
@@ -1881,6 +2012,7 @@ export class ShowcaseEngine {
   }
 
   private onPointerDown = (e: PointerEvent) => {
+    if (this.inputLocked) return;
     this.cancelTween();
     this.controls.autoRotate = false;
     this.emit('userInput', undefined);
@@ -1888,6 +2020,10 @@ export class ShowcaseEngine {
     this.drag = { x: e.clientX, y: e.clientY, moved: false, button: e.button };
   };
   private onPointerMove = (e: PointerEvent) => {
+    if (this.inputLocked) {
+      this.drag = null;
+      return;
+    }
     const d = this.drag;
     if (d) {
       if (e.buttons === 0) {
@@ -1931,9 +2067,17 @@ export class ShowcaseEngine {
     if (!d || d.moved || d.button !== 0) return;
     const rect = this.container.getBoundingClientRect();
     if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+    // Tool ukur aktif: klik memasang titik ukur pada permukaan model,
+    // pemilihan elemen dilewati (perilaku sama dengan Mode teknis).
+    if (this.measureActive) {
+      const gid = this.pickAt(e.clientX, e.clientY);
+      this.addMeasurePointAt(gid, this.lastPickPoint);
+      return;
+    }
     this.select(this.pickAt(e.clientX, e.clientY));
   };
   private onWheel = (e: WheelEvent) => {
+    if (this.inputLocked) return;
     this.cancelTween();
     this.controls.autoRotate = false;
     this.emit('userInput', undefined);
@@ -1943,7 +2087,7 @@ export class ShowcaseEngine {
     this.camera.position.addScaledVector(dir, -Math.sign(e.deltaY) * this.walkSpeed * 0.4);
   };
   private onKeyDown = (e: KeyboardEvent) => {
-    if (this.isTypingTarget(e)) return;
+    if (this.inputLocked || this.isTypingTarget(e)) return;
     const k = e.key.toLowerCase();
     if (['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
       if (k !== 'shift') {
@@ -2113,13 +2257,19 @@ export class ShowcaseEngine {
   // Pilih elemen di bawah sinar. Dua putaran: benda padat dulu, baru objek
   // tembus pandang / non-fisik (volume ruang, grid, anotasi) — supaya yang
   // "kosong" tidak pernah merebut klik dari benda nyata di belakangnya.
+  // Titik dunia tembus terbaik ikut tersimpan di sini untuk tool ukur.
+  private lastPickPoint: THREE.Vector3 | null = null;
   private pickNdc(ndc: THREE.Vector2, hover = false): string | null {
     // Klik diberi tenggat juga (dulu cuma hover): di model besar, klik di
     // titik yang menembus tumpukan kotak batas besar bisa menyapu ratusan
     // kandidat dan membekukan frame. Kalau tenggat habis, hasil terbaik
     // sejauh ini yang dipakai — bukan membekukan halaman.
     const deadline = performance.now() + (hover ? 6 : PICK_CLICK_BUDGET_MS);
-    if (this.merge || this.recordList.length === 0) return null;
+    if (this.merge || this.recordList.length === 0) {
+      this.lastPickPoint = null;
+      return null;
+    }
+    this.lastPickPoint = null;
     this.raycaster.setFromCamera(ndc, this.camera);
     const ray = this.raycaster.ray;
     const ox = ray.origin.x;
@@ -2167,6 +2317,7 @@ export class ShowcaseEngine {
         } else if (d < bestDist) {
           bestDist = d;
           best = rec;
+          this.lastPickPoint = this.tmpHit.clone();
         }
       }
       // Kotak batas TIDAK dipakai sebagai jawaban kalau segitiganya memang
@@ -2443,6 +2594,7 @@ export class ShowcaseEngine {
     this.stepLabels();
     this.stepMinimap(now);
     this.stepCenterLook(now);
+    this.stepMeasure();
     this.frames++;
     if (now - this.lastStats > 500) {
       const fps = Math.round((this.frames * 1000) / (now - this.lastStats));
@@ -2525,6 +2677,8 @@ export class ShowcaseEngine {
     (this.selBox?.material as THREE.Material | undefined)?.dispose();
     this.selBox?.removeFromParent();
     this.selBox = null;
+    this.measureLabel?.remove();
+    this.measureLabel = null;
     this.controls.dispose();
     this.clearModel();
     this.ground?.geometry.dispose();

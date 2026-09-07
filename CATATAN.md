@@ -107,6 +107,30 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Performa: "3D berat saat navigasi" di mode presentasi (model besar).**
+  Laporan: semua gerakan patah-patah, sendat sesaat berulang, terasa juga saat
+  klik/membuka panel. Enam penyetelan di `lib/showcase/engine.ts`:
+  1. **MSAA dimatikan & pixel ratio 1,5 → 1,25.** Antialias 4× pada canvas
+     besar + DPR tinggi = biaya piksel terbesar tiap frame; model monokrom
+     hasil penggabungan nyaris tidak terpengaruh tampilannya.
+  2. **Jaring pengaman kualitas adaptif bertahap, ambang 20 → 45 FPS.** Dulu
+     hanya bereaksi di bawah 20 FPS dan sekali lepas; model yang selalu
+     25–35 FPS tidak pernah ditolong. Sekarang turun bertahap: bayangan dulu,
+     baru resolusi −0,25 per langkah, sampai frame layak lagi.
+  3. **`setPixelRatio` kini diikuti `setSize`** — sebelumnya penurunan
+     resolusi otomatis TIDAK PERNAH berefek (three tidak mengubah drawing
+     buffer hanya karena rasio diganti). Bug lama yang baru ketahuan.
+  4. **Ambang model berat 6 → 3 juta segitiga** (bayangan mati otomatis).
+  5. **Klik diberi tenggat 24 ms** (dulu hanya hover yang dibatasi 6 ms, klik
+     berjalan sampai selesai — klik di titik sial bisa membekukan frame
+     ratusan ms). Kalau tenggat habis, elemen kotaknya paling dekat yang
+     dipakai, bukan halaman beku.
+  6. **Hover raycast 12,5× → 6,7× per detik** (80 → 150 ms) — tooltip tetap
+     responsif, tapi penyapuan kotak batas puluhan ribu elemen tidak lagi
+     bertabrakan dengan gerakan kamera (sumber "sendat sesaat berulang").
+  Catatan: setelah deploy, cek panel **?** — kalau FPS tetap < 30 setelah
+  kualitas diturunkan otomatis (chip pemberitahuan muncul), berarti leher
+  botolnya GPU, bukan JS; langkah berikutnya menurunkan pixel ratio minimum.
 - **Mode presentasi: Mode statis** — pill ketiga di topbar (sebelah Mode jalan
   & Mode orbit). Kamera BEKU seperti Mode teknis: OrbitControls dimatikan
   (tidak bisa diputar/zoom), keyboard W/A/S/D/Q/E diabaikan, tooltip hover

@@ -7,7 +7,7 @@ interface StopRow {
   id?: string;
   title: string;
   description: string;
-  mode: 'orbit' | 'walk' | 'plan';
+  mode: 'orbit' | 'walk' | 'plan' | 'static';
   pose: { position: [number, number, number]; target: [number, number, number] };
   highlight: { gids?: string[]; categories?: string[] } | null;
 }
@@ -17,7 +17,7 @@ function rowToStop(r: StopRow, i: number): TourStop {
     id: r.id ?? `saved-${i}`,
     title: r.title,
     description: r.description ?? '',
-    mode: r.mode === 'walk' ? 'walk' : 'orbit',
+    mode: r.mode === 'walk' ? 'walk' : r.mode === 'static' ? 'static' : 'orbit',
     plan: r.mode === 'plan',
     pose: r.pose,
     highlightGids: r.highlight?.gids?.length ? r.highlight.gids : undefined,

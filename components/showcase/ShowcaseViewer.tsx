@@ -802,6 +802,16 @@ export default function ShowcaseViewer({
             {Icons.orbit}
             <span className="sc-pill-label">{s.modeOrbit}</span>
           </button>
+          <button
+            type="button"
+            title={s.modeStatic}
+            aria-label={s.modeStatic}
+            className={`sc-pill ${mode === 'static' ? 'is-on' : ''}`}
+            onClick={() => engineRef.current?.setMode('static')}
+          >
+            {Icons.pause}
+            <span className="sc-pill-label">{s.modeStatic}</span>
+          </button>
         </Panel>
 
         <div className="sc-topbar-side sc-topbar-right">
@@ -992,7 +1002,7 @@ export default function ShowcaseViewer({
 
       {/* Status kiri bawah — satu baris, di bawah panel kiri */}
       <div className="sc-status">
-        <span className="truncate">{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
+        <span className="truncate">{mode === 'walk' ? s.statusWalk : mode === 'static' ? s.statusStatic : s.statusOrbit}</span>
       </div>
 
       {/* Panel section box: 6 slider X/Y/Z, + dan −. */}

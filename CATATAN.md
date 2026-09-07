@@ -17,9 +17,10 @@ Website presentasi model Revit ke client:
 - Sheet PDF yang bisa diklik untuk memindahkan sudut kamera 3D
 - Auto-update saat model baru di-push dari Revit (Supabase Realtime)
 - Download file `.rvt` (disimpan di Google Drive)
-- **Mode presentasi** (gaya virtual plant tour): jalan kaki/orbit, tur terpandu
-  otomatis, navigator & inspeksi elemen, label, minimap, **Asisten AI** yang bisa
-  menggerakkan viewer
+- **Mode presentasi** (gaya virtual plant tour): jalan kaki/orbit/**statis**
+  (kamera beku), tur terpandu otomatis, navigator & inspeksi elemen, label,
+  minimap, section box dengan bingkai 3D, **Asisten AI** yang bisa menggerakkan
+  viewer
 
 **Stack:** Next.js 15 · React 19 · Three.js 0.170 · Tailwind · Supabase
 (database + Realtime) · Google Drive API (penyimpanan file besar) ·
@@ -104,6 +105,24 @@ Website presentasi model Revit ke client:
 ## Riwayat Perubahan
 
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
+
+### 7 September 2026
+- **Mode presentasi: Mode statis** — pill ketiga di topbar (sebelah Mode jalan
+  & Mode orbit). Kamera BEKU seperti Mode teknis: OrbitControls dimatikan
+  (tidak bisa diputar/zoom), keyboard W/A/S/D/Q/E diabaikan, tooltip hover
+  tidak dihitung. Klik tetap memilih elemen dan tombol E tetap membuka
+  inspeksi — dipakai untuk memotret tampilan yang harus sama persis berulang.
+  Kembali ke orbit/jalan dengan pill yang sama; posisi kamera dipertahankan.
+  Tur tersimpan boleh memakai mode `static` (kolom `mode` tabel `tour_stops`
+  menerima nilai itu; data lama tanpa `static` tidak berubah).
+- **Kotak section di 3D (mode presentasi)** — saat Section aktif, bingkai kawat
+  hijau menggambar kotak potong di scene dan mengikuti 6 slider X/Y/Z secara
+  langsung (sebelumnya hasil potongan hanya terlihat, batasnya tidak). Garis
+  `depthTest=false` supaya tetap terlihat di balik dinding, dipasang ke scene
+  (bukan model) supaya luput dari raycast & ikut hilang saat model diganti.
+  Posisi bidangnya memakai rumus yang sama dengan plane clipping
+  (`cx + hx*xMax` dst.) — dua-duanya dihitung di `refreshClipping()`, jadi
+  tidak mungkin tidak sinkron.
 
 ### 6 September 2026
 - **Fix: 3D tidak tampil sama sekali (layar kosong) — WebGL context lost.**

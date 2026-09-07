@@ -107,6 +107,13 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **"Turn off section" sekaligus mengembalikan tampilan awal.** Laporan:
+  setelah slider section digeser (mis. Y− dipotong) lalu dimatikan, model
+  terlihat "masih terpotong". Bukan bug potongan — kameranya memang masih di
+  posisi waktu memotong (menghadap area kosong hasil potongan), jadi yang
+  terlihat cuma langit/lantai. Kini tombol "Matikan potongan" memanggil
+  resetView: potongan dibuang DAN kamera kembali ke tampilan awal — hasil
+  akhirnya sama seperti tombol reset, sesuai harapan.
 - **Draft editor tur bertahan refresh.** Laporan: "Save current view" lalu
   refresh → pandangan yang ditangkap hilang. Penyebab: draft editor cuma ada
   di state React; yang tersimpan ke DB hanyalah setelah tombol "Simpan tur".

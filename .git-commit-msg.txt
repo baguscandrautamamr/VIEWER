@@ -1,0 +1,14 @@
+feat(web): draft tur tahan refresh + kecepatan navigasi + panel section tidak lagi mematikan potongan
+
+- Draft editor tur disimpan ke localStorage per proyek tiap berubah; refresh
+  tidak lagi menghilangkan "Save current view" yang belum disimpan. Draft
+  lebih baru mengalahkan isi DB saat halaman dibuka, dan dibuang otomatis
+  begitu "Simpan tur" (draft == tersimpan).
+- Slider kecepatan navigasi 0,25x-5x di panel kiri (setSpeed di engine):
+  berlaku untuk WASD/panah mode jalan & orbit, Q/E, dan scroll mode jalan;
+  nilai tersimpan di localStorage seperti preferensi tampilan lain.
+- Tutup panel section (x) kini hanya menutup panel - potongan tetap aktif
+  sesuai slider terakhir; tombol "Matikan potongan" yang mengembalikan
+  model utuh.
+
+Co-Authored-By: [CC] <noreply@anthropic.com>

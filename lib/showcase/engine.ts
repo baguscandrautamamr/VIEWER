@@ -234,6 +234,8 @@ export class ShowcaseEngine {
   style: Style = 'mono';
   labelsOn = false;
   walkSpeed = 3; // m/s
+  // Pengali kecepatan navigasi (jalan/orbit + scroll) dari slider UI.
+  speedMult = 1;
   planActive = false;
   sectionOn = false;
   sectionClip: SectionClip = { xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
@@ -1893,6 +1895,13 @@ export class ShowcaseEngine {
     return this.controls.autoRotate;
   }
 
+  // Kecepatan navigasi (slider "Speed"): pengali atas walkSpeed dasar yang
+  // sudah diskalakan ukuran model. Berlaku untuk WASD/panah (jalan & orbit)
+  // dan scroll di mode jalan; Shift tetap menggandakan di atasnya.
+  setSpeed(mult: number) {
+    this.speedMult = THREE.MathUtils.clamp(mult, 0.25, 8);
+  }
+
   // Terbang ke satu elemen: jarak pas dari FOV (bola pembatas), arah pandang
   // dipertahankan. Di mode jalan: berdiri di dekat elemen pada eye level.
   focusElement(gid: string, dur = 1.2) {
@@ -2084,7 +2093,7 @@ export class ShowcaseEngine {
     if (this.mode !== 'walk') return;
     e.preventDefault();
     const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(0, this.yaw, 0, 'YXZ'));
-    this.camera.position.addScaledVector(dir, -Math.sign(e.deltaY) * this.walkSpeed * 0.4);
+    this.camera.position.addScaledVector(dir, -Math.sign(e.deltaY) * this.walkSpeed * this.speedMult * 0.4);
   };
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.inputLocked || this.isTypingTarget(e)) return;
@@ -2126,7 +2135,7 @@ export class ShowcaseEngine {
   private stepKeys(dt: number) {
     if (this.keys.size === 0) return;
     const run = this.keys.has('shift') ? 2.6 : 1;
-    const v = this.walkSpeed * run * dt;
+    const v = this.walkSpeed * this.speedMult * run * dt;
     const fwd = (this.keys.has('w') || this.keys.has('arrowup') ? 1 : 0) - (this.keys.has('s') || this.keys.has('arrowdown') ? 1 : 0);
     const side = (this.keys.has('d') || this.keys.has('arrowright') ? 1 : 0) - (this.keys.has('a') || this.keys.has('arrowleft') ? 1 : 0);
     const up = (this.keys.has('e') ? 1 : 0) - (this.keys.has('q') ? 1 : 0);
@@ -2142,7 +2151,7 @@ export class ShowcaseEngine {
       // Orbit: geser kamera & target bersama (fly-through rata), kecepatan
       // relatif jarak ke target supaya terasa sama di dekat & jauh.
       const dist = this.camera.position.distanceTo(this.controls.target);
-      const s = Math.max(dist * 0.6, this.walkSpeed) * run * dt;
+      const s = Math.max(dist * 0.6, this.walkSpeed) * this.speedMult * run * dt;
       const dir = this.controls.target.clone().sub(this.camera.position);
       dir.y = 0;
       if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1);

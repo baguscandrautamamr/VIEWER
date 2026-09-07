@@ -54,6 +54,9 @@ const TOPBAR_H = 52;
 type SidePanel = 'none' | 'inspect' | 'ai' | 'help' | 'tour';
 
 const PREFS_KEY = 'rwv_showcase';
+// Draft editor tur per proyek — bertahan refresh, hilang saat "Simpan tur"
+// (draft == tersimpan) atau dikosongkan lewat "Kosongkan" + simpan.
+const DRAFT_KEY = 'rwv_tour_draft';
 
 export default function ShowcaseViewer({
   projectId,
@@ -93,6 +96,8 @@ export default function ShowcaseViewer({
   // pasang 2 titik pada model, coret membekukan navigasi supaya gambar pas.
   const [measureOn, setMeasureOn] = useState(false);
   const [markupOn, setMarkupOn] = useState(false);
+  // Kecepatan navigasi (slider). Tersimpan di localStorage seperti gaya/label.
+  const [speed, setSpeed] = useState(1);
   const [planActive, setPlanActive] = useState(false);
   const [side, setSide] = useState<SidePanel>('none');
   const [navOpen, setNavOpen] = useState(false);
@@ -181,6 +186,10 @@ export default function ShowcaseViewer({
         engine.setLabels(p.labels);
         setLabels(p.labels);
       }
+      if (typeof p.speed === 'number' && p.speed >= 0.25 && p.speed <= 8) {
+        engine.setSpeed(p.speed);
+        setSpeed(p.speed);
+      }
     } catch {
       /* abaikan */
     }
@@ -248,7 +257,19 @@ export default function ShowcaseViewer({
       .then((stops) => {
         if (!active) return;
         setSavedStops(stops);
-        setEditorStops(stops);
+        // Draft editor yang belum sempat disimpan (refresh/putus jaringan)
+        // diutamakan daripada yang tersimpan di DB — sama seperti draft form.
+        let draft: TourStop[] | null = null;
+        try {
+          const raw = localStorage.getItem(`${DRAFT_KEY}:${projectId}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as TourStop[];
+            if (Array.isArray(parsed) && parsed.length > 0) draft = parsed;
+          }
+        } catch {
+          /* abaikan */
+        }
+        setEditorStops(draft ?? stops);
       })
       .catch(() => {});
 
@@ -274,11 +295,29 @@ export default function ShowcaseViewer({
 
   useEffect(() => {
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ style, labels }));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ style, labels, speed }));
     } catch {
       /* abaikan */
     }
-  }, [style, labels]);
+  }, [style, labels, speed]);
+
+  // Terapkan kecepatan navigasi ke mesin tiap slider berubah.
+  useEffect(() => {
+    engineRef.current?.setSpeed(speed);
+  }, [speed]);
+
+  // Simpan draft editor tur tiap berubah supaya refresh tidak menghilangkan
+  // pandangan yang sudah ditangkap tapi belum di-"Simpan tur".
+  useEffect(() => {
+    if (savedStops.length === 0 && editorStops.length === 0) return;
+    try {
+      const key = `${DRAFT_KEY}:${projectId}`;
+      if (editorStops === savedStops) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(editorStops));
+    } catch {
+      /* kuota penuh / mode privat — abaikan */
+    }
+  }, [editorStops, savedStops, projectId]);
 
   // Terapkan potongan model (section box) ke mesin tiap kali berubah.
   useEffect(() => {
@@ -891,6 +930,8 @@ export default function ShowcaseViewer({
             window.setTimeout(() => engine.setAutoRotate(v), engine.mode === 'orbit' ? 0 : 1050);
             setAutoRotate(v);
           }}
+          speed={speed}
+          onSpeed={setSpeed}
           onFind={() => setNavOpen(true)}
           onReset={resetView}
           onEntrance={() => {
@@ -1038,7 +1079,9 @@ export default function ShowcaseViewer({
         <span className="truncate">{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
       </div>
 
-      {/* Panel section box: 6 slider X/Y/Z, + dan −. */}
+      {/* Panel section box: 6 slider X/Y/Z, + dan −. Menutup panel (×) TIDAK
+          mematikan potongan — model tetap terpotong sesuai pengaturan; pakai
+          "Matikan potongan" untuk mengembalikan model utuh. */}
       {sectionOn && loadState === 'ready' && (
         <Panel className="sc-section">
           <div className="flex items-center justify-between">
@@ -1046,12 +1089,10 @@ export default function ShowcaseViewer({
             <button
               type="button"
               className="text-[11px] text-white/55 hover:text-white"
-              onClick={() => {
-                setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
-                setSectionOn(false);
-              }}
+              onClick={() => setSectionOn(false)}
+              title={s.sectionOff}
             >
-              {s.resetView}
+              ✕
             </button>
           </div>
           {(
@@ -1077,6 +1118,17 @@ export default function ShowcaseViewer({
               />
             </label>
           ))}
+          <button
+            type="button"
+            className="sc-btn mt-1 w-full"
+            onClick={() => {
+              setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
+              setSectionOn(false);
+            }}
+          >
+            {Icons.reset}
+            {s.sectionTurnOff}
+          </button>
         </Panel>
       )}
 

@@ -107,6 +107,27 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Draft editor tur bertahan refresh.** Laporan: "Save current view" lalu
+  refresh → pandangan yang ditangkap hilang. Penyebab: draft editor cuma ada
+  di state React; yang tersimpan ke DB hanyalah setelah tombol "Simpan tur".
+  Kini tiap perubahan draft ditulis ke `localStorage` per proyek
+  (`rwv_tour_draft:<projectId>`); saat halaman dibuka, draft yang lebih baru
+  mengalahkan isi DB. Draft otomatis dibuang begitu tersimpan (draft ==
+  tersimpan) — "Kosongkan" + simpan juga membersihkannya.
+- **Slider kecepatan navigasi di mode presentasi.** Panel kiri dapat baris
+  "Kecepatan navigasi" (0,25×–5×), pengali atas `walkSpeed` dasar yang sudah
+  diskalakan ukuran model. Berlaku untuk WASD/panah (mode jalan & orbit),
+  naik/turun Q/E, dan scroll mode jalan; Shift tetap menggandakan di atasnya.
+  Nilainya tersimpan di localStorage seperti gaya tampilan & label
+  (`engine.setSpeed()`).
+- **Fix: menutup panel section mematikan potongan.** Dulu tombol "Reset view"
+  di panel section sekaligus mengembalikan semua slider ke 1 dan mematikan
+  `sectionOn` — menutup panel sama dengan membuang pengaturan. Sekarang:
+  tombol **×** hanya MENUTUP panel, potongan TETAP AKTIF sesuai slider
+  terakhir (perilaku yang diharapkan: 3D tetap sama seperti pas disetting);
+  tombol **"Matikan potongan"** di bawah slider yang mengembalikan model
+  utuh. Label panel dock "Potongan" juga tetap menyala (`is-on`) selama
+  potongan aktif, jadi terlihat potongannya masih bekerja meski panel tertutup.
 - **Markup & ukur di mode presentasi** — dua tool andalan Mode teknis kini ada
   juga di viewer presentasi (pill "Ukur" & "Coret" di dock).
   - **Ukur**: klik 2 titik pada model → jarak + selisih per sumbu (Z = tinggi,

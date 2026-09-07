@@ -32,6 +32,8 @@ export default function ExplorePanel({
   onShadows,
   autoRotate,
   onAutoRotate,
+  speed,
+  onSpeed,
   onFind,
   onReset,
   onEntrance,
@@ -56,6 +58,8 @@ export default function ExplorePanel({
   onShadows: (v: boolean) => void;
   autoRotate: boolean;
   onAutoRotate: (v: boolean) => void;
+  speed: number;
+  onSpeed: (v: number) => void;
   onFind: () => void;
   onReset: () => void;
   onEntrance: () => void;
@@ -135,6 +139,24 @@ export default function ExplorePanel({
           />
           <Toggle on={shadows} onChange={onShadows} label={s.shadows} icon={Icons.sun} />
           <Toggle on={autoRotate} onChange={onAutoRotate} label={s.autoRotate} icon={Icons.rotate} />
+          {/* Kecepatan navigasi: maju/mundur (W/S), geser (A/D), naik/turun
+              (Q/E) dan scroll mode jalan. 1× = kecepatan dasar model. */}
+          <label className="sc-speed-row">
+            <span className="flex items-center gap-1.5 text-white/70">
+              <span className="text-[color:var(--sc-accent)]">{Icons.spark}</span>
+              {s.speed}
+            </span>
+            <span className="sc-mono text-[10.5px] text-white/55">{speed.toFixed(1)}×</span>
+            <input
+              type="range"
+              min={0.25}
+              max={5}
+              step={0.25}
+              value={speed}
+              onChange={(e) => onSpeed(parseFloat(e.target.value))}
+              className="sc-section-range w-full"
+            />
+          </label>
 
           <div className="sc-sep" />
           <RowButton onClick={onReset} label={s.resetView} icon={Icons.reset} />

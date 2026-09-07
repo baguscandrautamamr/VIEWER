@@ -144,6 +144,9 @@ body {
   padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;
 }
 .sc-section-range { flex: 1; min-width: 0; accent-color: var(--sc-accent); }
+/* Baris slider kecepatan navigasi di panel kiri */
+.sc-speed-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 6px 10px; font-size: 12px; }
+.sc-speed-row input { grid-column: 1 / -1; }
 
 .sc-pill {
   display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 7px;

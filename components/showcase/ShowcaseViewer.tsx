@@ -1118,14 +1118,11 @@ export default function ShowcaseViewer({
               />
             </label>
           ))}
-          <button
-            type="button"
-            className="sc-btn mt-1 w-full"
-            onClick={() => {
-              setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
-              setSectionOn(false);
-            }}
-          >
+          {/* Matikan potongan = buang potongan SEKALIAN kembalikan tampilan
+              awal (resetView). Tanpa ini kamera masih menghadap area yang
+              tadi dipotong (mis. bawah Y−) sehingga model terlihat "masih
+              terpotong" padahal cuma sudut pandangnya. */}
+          <button type="button" className="sc-btn mt-1 w-full" onClick={resetView}>
             {Icons.reset}
             {s.sectionTurnOff}
           </button>

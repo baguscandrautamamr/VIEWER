@@ -128,12 +128,25 @@ const MERGE_RENDER_EVERY_MS = 260;
 // Di atas ambang ini bayangan dimatikan otomatis: lintasan bayangan
 // menggandakan kerja vertex, dan pada model sebesar ini itu yang bikin
 // navigasi tersendat. Bisa dinyalakan lagi dari panel Tampilan.
-const HEAVY_TRIANGLES = 6_000_000;
+// Turun dari 6 juta: laporan lapangan "3D berat saat navigasi" datang pada
+// model yang belum menyentuh ambang lama, dan bayangan adalah biaya terbesar
+// yang bisa dilepas tanpa mengubah bentuk tampilan.
+const HEAVY_TRIANGLES = 3_000_000;
 // Kandidat yang diuji per klik (setelah diurutkan berdasarkan jarak kotak).
 const PICK_CANDIDATES = 128;
 // Elemen dengan segitiga sebanyak ini tidak diuji per segitiga — jarak dari
 // kotak batasnya sudah cukup akurat dan jauh lebih murah.
 const PICK_EXACT_MAX_TRIS = 60_000;
+// Klik juga diberi tenggat. Dulu hanya hover yang dibatasi (6 ms) sementara
+// klik berjalan sampai selesai — di model besar, klik di titik yang sial
+// (menembus tumpukan kotak batas besar) membekukan frame ratusan ms.
+// 24 ms tetap terasa instan, tapi membatasi kerja per klik.
+const PICK_CLICK_BUDGET_MS = 24;
+// Jaring pengaman kualitas: FPS digambar di bawah ini berturut-turut
+// menurunkan kualitas bertahap (bayangan dulu, lalu resolusi). Dulu ambangnya
+// 20 FPS & butuh 3 sampel — di 25–35 FPS ("patah-patah tapi tidak pernah
+// < 20") dia diam saja. Sekarang turun bertahap mulai dari sini.
+const SLOW_FPS = 45;
 const PARTIAL_UPLOAD_MAX = 300;
 
 const COLORS = {
@@ -346,10 +359,14 @@ export class ShowcaseEngine {
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 5000);
     this.camera.position.set(30, 20, 30);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
-    // Pixel ratio dibatasi 1,5: di layar retina, DPR 2–3 berarti 4–9× piksel
-    // yang harus di-shading — tidak sepadan untuk presentasi.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    // Antialias MSAA dimatikan: pada canvas besar biayanya besar, padahal
+    // model sudah digabung & monokrom — tepi bergigi nyaris tidak terlihat,
+    // sedangkan 4× MSAA + DPR tinggi adalah biaya per frame yang paling
+    // terasa saat navigasi. Pixel ratio juga dibatasi lebih rendah (1,25):
+    // layar retina dengan DPR 2–3 berarti 4–9× piksel yang harus di-shading,
+    // tidak sepadan untuk presentasi.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -1765,7 +1782,10 @@ export class ShowcaseEngine {
     }
     if (this.mode === 'orbit' && !this.tween && !this.merge) {
       const now = performance.now();
-      if (now - this.lastHover < 80) return;
+      // Hover menyapu kotak batas puluhan ribu elemen — 6–7×/detik cukup
+      // untuk tooltip; dulu 12,5×/detik (80 ms) dan itu terasa saat model
+      // besar digerakkan sambil mouse melintas di kanvas.
+      if (now - this.lastHover < 150) return;
       this.lastHover = now;
       const rect = this.container.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -1969,7 +1989,11 @@ export class ShowcaseEngine {
   // tembus pandang / non-fisik (volume ruang, grid, anotasi) — supaya yang
   // "kosong" tidak pernah merebut klik dari benda nyata di belakangnya.
   private pickNdc(ndc: THREE.Vector2, hover = false): string | null {
-    const deadline = hover ? performance.now() + 6 : Infinity;
+    // Klik diberi tenggat juga (dulu cuma hover): di model besar, klik di
+    // titik yang menembus tumpukan kotak batas besar bisa menyapu ratusan
+    // kandidat dan membekukan frame. Kalau tenggat habis, hasil terbaik
+    // sejauh ini yang dipakai — bukan membekukan halaman.
+    const deadline = performance.now() + (hover ? 6 : PICK_CLICK_BUDGET_MS);
     if (this.merge || this.recordList.length === 0) return null;
     this.raycaster.setFromCamera(ndc, this.camera);
     const ray = this.raycaster.ray;
@@ -2022,7 +2046,10 @@ export class ShowcaseEngine {
       }
       // Kotak batas TIDAK dipakai sebagai jawaban kalau segitiganya memang
       // diuji dan meleset — klik di ruang kosong harus tetap "tidak ada".
-      const pick = best ?? (approxDist <= bestDist ? approx : null);
+      // Kecualinya kalau tenggat habis di tengah uji: lebih baik menjawab
+      // elemen paling dekat dari kotaknya daripada membekukan halaman.
+      const timedOut = performance.now() >= deadline;
+      const pick = best ?? (timedOut ? approx : approxDist <= bestDist ? approx : null);
       if (pick) return pick.gid;
     }
     return null;
@@ -2275,10 +2302,10 @@ export class ShowcaseEngine {
       this.renderer.render(this.scene, this.camera);
       return;
     }
-    const changed = this.renderDirty
+    const frameChanged = this.renderDirty
       || !this.camera.position.equals(this.renderedPosition)
       || !this.camera.quaternion.equals(this.renderedQuaternion);
-    if (changed) {
+    if (frameChanged) {
       this.renderer.render(this.scene, this.camera);
       this.renderedPosition.copy(this.camera.position);
       this.renderedQuaternion.copy(this.camera.quaternion);
@@ -2297,19 +2324,33 @@ export class ShowcaseEngine {
       this.frames = 0;
       this.lastStats = now;
       const p = this.camera.position;
-      // Jaring pengaman: kalau frame tetap berat berturut-turut, matikan
-      // bayangan sekali saja supaya viewer tetap bisa dipakai.
+      // Jaring pengaman adaptif: di bawah SLOW_FPS, kualitas diturunkan
+      // BERTAHAP — bayangan dulu (biaya terbesar, tidak mengubah bentuk),
+      // baru resolusi — sampai frame kembali layak. Dulu ambangnya 20 FPS dan
+      // hanya sekali lepas, jadi model yang selalu 25–35 FPS tidak pernah
+      // ditolong. Dipicu hanya oleh frame yang benar-benar digambar (lihat
+      // catatan #55) dan tidak jalan saat menyiapkan model.
       const activeFps = this.renderedTime > 0 ? this.renderedFrames / this.renderedTime : 0;
-      if (changed && activeFps > 0 && activeFps < 20 && (this.parts.length > 0 || this.instGroups.length > 0) && !this.merge) {
+      if (frameChanged && activeFps > 0 && activeFps < SLOW_FPS && (this.parts.length > 0 || this.instGroups.length > 0) && !this.merge) {
         this.slowFrames++;
         if (this.slowFrames >= 3) {
-          if (this.shadowsOn) this.setShadows(false);
+          let changed = false;
+          if (this.shadowsOn) {
+            this.setShadows(false);
+            changed = true;
+          }
           const ratio = this.renderer.getPixelRatio();
-          if (ratio > 0.75) {
+          if (!changed && ratio > 0.75) {
             this.renderer.setPixelRatio(Math.max(0.75, ratio - 0.25));
+            // setPixelRatio TIDAK mengubah ukuran drawing buffer — perlu
+            // setSize ulang, kalau tidak penurunan resolusi tidak berefek.
+            this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+            changed = true;
+          }
+          if (changed) {
+            this.autoLightened = true;
             this.renderDirty = true;
           }
-          this.autoLightened = true;
           this.slowFrames = 0;
         }
       } else this.slowFrames = 0;

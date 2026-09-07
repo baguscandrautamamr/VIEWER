@@ -107,6 +107,15 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Fix akar masalah section: satu state untuk dua arti.** Laporan pertama
+  "menutup panel mematikan potongan" ternyata persis itu: panel section
+  dirender bersyarat `sectionOn`, jadi ✕ yang harusnya cuma menutup panel
+  memang di-set `sectionOn=false` — potongan pun hilang. Perbaikan pertama
+  (✕ tetap `setSectionOn(false)`) jadi salah sasaran. Kini DUA state:
+  `sectionOn` (potongan aktif di model) dan `sectionOpen` (panel terbuka).
+  ✕ hanya menutup panel → pile/stump yang terpotong TETAP terpotong (persis
+  seperti saat slider digeser); pill "Potongan" tetap menyala; "Matikan
+  potongan" (atau reset view) yang mengembalikan segalanya.
 - **"Turn off section" sekaligus mengembalikan tampilan awal.** Laporan:
   setelah slider section digeser (mis. Y− dipotong) lalu dimatikan, model
   terlihat "masih terpotong". Bukan bug potongan — kameranya memang masih di

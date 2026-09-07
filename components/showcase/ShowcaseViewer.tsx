@@ -90,7 +90,12 @@ export default function ShowcaseViewer({
   const [shadows, setShadows] = useState(true);
   const [autoRotate, setAutoRotate] = useState(false);
   // Potongan (section box): 6 bidang X/Y/Z ±, nilai 0..1 (1 = tepi model).
+  // DUA state terpisah: `sectionOn` = potongan aktif di model, `sectionOpen`
+  // = panel slidernya terbuka. Dulu satu state untuk dua-duanya, jadi
+  // menutup panel ikut membatalkan potongan — sekarang ✕ hanya menutup
+  // panel, potongan tetap terpotong sampai "Matikan potongan" diklik.
   const [sectionOn, setSectionOn] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState(false);
   const [clip, setClip] = useState<SectionClip>({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
   // Tool ukur & layer coret-coret — perilaku sama dengan Mode teknis: ukur
   // pasang 2 titik pada model, coret membekukan navigasi supaya gambar pas.
@@ -541,6 +546,7 @@ export default function ShowcaseViewer({
     // Reset potongan (section box) ke tepi penuh.
     setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
     setSectionOn(false);
+    setSectionOpen(false);
     setMeasureOn(false);
     setMarkupOn(false);
   }, [exitTour]);
@@ -806,6 +812,7 @@ export default function ShowcaseViewer({
         resetView();
       } else if (k === 's') {
         setSectionOn((v) => !v);
+        setSectionOpen((v) => !v);
       } else if (k === '/' ) {
         e.preventDefault();
         setNavOpen(true);
@@ -1007,7 +1014,18 @@ export default function ShowcaseViewer({
               {Icons.spark}
               {s.assistant}
             </button>
-            <button type="button" className={`sc-pill ${sectionOn ? 'is-on' : ''}`} onClick={() => setSectionOn((v) => !v)} title={s.section}>
+            {/* Pill section: nyalakan/matikan potongan SEKALIGUS buka/tutup
+                panelnya — satu klik dua hal, biar pertama kali langsung ada
+                slidernya. Setelah itu ✕ di panel hanya menutup panel. */}
+            <button
+              type="button"
+              className={`sc-pill ${sectionOn ? 'is-on' : ''}`}
+              onClick={() => {
+                setSectionOn((v) => !v);
+                setSectionOpen((v) => !v);
+              }}
+              title={s.section}
+            >
               {Icons.slice}
               {s.section}
             </button>
@@ -1079,17 +1097,18 @@ export default function ShowcaseViewer({
         <span className="truncate">{mode === 'walk' ? s.statusWalk : s.statusOrbit}</span>
       </div>
 
-      {/* Panel section box: 6 slider X/Y/Z, + dan −. Menutup panel (×) TIDAK
-          mematikan potongan — model tetap terpotong sesuai pengaturan; pakai
-          "Matikan potongan" untuk mengembalikan model utuh. */}
-      {sectionOn && loadState === 'ready' && (
+      {/* Panel section box: 6 slider X/Y/Z, + dan −. Kondisi render pakai
+          `sectionOpen`, bukan `sectionOn` — menutup panel (×) TIDAK
+          mematikan potongan; model tetap terpotong sesuai pengaturan sampai
+          "Matikan potongan" diklik. */}
+      {sectionOn && sectionOpen && loadState === 'ready' && (
         <Panel className="sc-section">
           <div className="flex items-center justify-between">
             <span className="sc-eyebrow">{s.section}</span>
             <button
               type="button"
               className="text-[11px] text-white/55 hover:text-white"
-              onClick={() => setSectionOn(false)}
+              onClick={() => setSectionOpen(false)}
               title={s.sectionOff}
             >
               ✕

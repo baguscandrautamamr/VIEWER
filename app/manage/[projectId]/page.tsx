@@ -1,0 +1,174 @@
+import Link from 'next/link';
+import { createServiceClient } from '@/lib/supabase';
+import { isAdminAuthed, adminPasswordConfigured } from '@/lib/adminAuth';
+import { getLocale, getTheme, getStrings } from '@/lib/uiPrefs';
+import AdminLogin from '@/components/AdminLogin';
+import UploadModel from '@/components/UploadModel';
+import ImportElements from '@/components/ImportElements';
+import DeleteModelFileButton from '@/components/DeleteModelFileButton';
+import SheetVisibilityList, { type ManageSheet } from '@/components/SheetVisibilityList';
+import UiToggles from '@/components/UiToggles';
+
+export const dynamic = 'force-dynamic';
+
+interface ModelFileRow {
+  id: string;
+  drive_file_id: string;
+  label: string | null;
+  created_at: string | null;
+}
+
+interface SheetRow {
+  id: string;
+  sheet_number: string;
+  sheet_name: string | null;
+  is_visible: boolean | null;
+}
+
+export default async function ManagePage({
+  params,
+}: {
+  params: Promise<{ projectId: string }>;
+}) {
+  const { projectId } = await params;
+  const [t, locale, theme] = await Promise.all([getStrings(), getLocale(), getTheme()]);
+
+  if (!adminPasswordConfigured()) {
+    return (
+      <main className="mx-auto max-w-lg p-6">
+        <h1 className="mb-2 text-lg font-medium">{t.manage.title}</h1>
+        <p className="rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-500">
+          {t.manage.needPassword}
+        </p>
+      </main>
+    );
+  }
+  if (!(await isAdminAuthed())) {
+    return <AdminLogin t={t.login} />;
+  }
+
+  const supabase = createServiceClient();
+  const { data: project } = await supabase
+    .from('projects')
+    .select('id, name')
+    .eq('id', projectId)
+    .single();
+
+  const { data: files } = await supabase
+    .from('model_files')
+    .select('id, drive_file_id, label, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
+
+  const { data: sheetRows } = await supabase
+    .from('sheets')
+    .select('id, sheet_number, sheet_name, is_visible')
+    .eq('project_id', projectId)
+    .order('sort_order', { ascending: true });
+
+  // Cek apakah nama & kategori elemen sudah diimpor. Objek di GLB dinamai
+  // GlobalId (IfcConvert --use-element-guids), jadi tanpa isi tabel `elements`
+  // viewer cuma bisa menampilkan kode acak & kategori "Default". Cukup hitung,
+  // tidak perlu tarik datanya.
+  const { count: elementCount } = await supabase
+    .from('elements')
+    .select('id', { count: 'exact', head: true })
+    .eq('project_id', projectId);
+
+  const list = (files ?? []) as ModelFileRow[];
+  const sheets: ManageSheet[] = ((sheetRows ?? []) as SheetRow[]).map((s) => ({
+    id: s.id,
+    title: `${s.sheet_number}${s.sheet_name ? ' — ' + s.sheet_name : ''}`,
+    // Kolom baru: baris lama (null) dianggap tampil.
+    isVisible: s.is_visible !== false,
+  }));
+
+  return (
+    <main className="mx-auto max-w-2xl p-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-medium">{t.manage.title}</h1>
+          <p className="text-sm opacity-60">{project?.name ?? projectId}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <UiToggles locale={locale} theme={theme} />
+          <Link href="/" className="text-xs opacity-70 hover:opacity-100">
+            {t.manage.backToList}
+          </Link>
+        </div>
+      </div>
+
+      {/* Peringatan kalau nama & kategori elemen belum diimpor — kalau tidak,
+          masalahnya baru ketahuan saat model sudah tampil ke client. */}
+      {!elementCount && (
+        <div className="mb-4 rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-500">
+          <p className="font-medium">{t.manage.elementsMissing}</p>
+          <p className="mt-1 opacity-90">{t.manage.elementsMissingHint}</p>
+        </div>
+      )}
+
+      <ImportElements
+        projectId={projectId}
+        savedCount={elementCount ?? 0}
+        strings={{
+          title: t.manage.importTitle,
+          hint: t.manage.importHint,
+          button: t.manage.importButton,
+          reading: t.manage.importReading,
+          saving: t.manage.importSaving,
+          done: t.manage.importDone,
+          noElements: t.manage.importNoElements,
+          pickFile: t.manage.importPickFile,
+          saved: t.manage.importSaved,
+          savedHint: t.manage.importSavedHint,
+        }}
+      />
+
+      <UploadModel
+        projectId={projectId}
+        strings={{ title: t.manage.uploadTitle, label: t.manage.label, upload: t.manage.upload, uploading: t.manage.uploading }}
+      />
+
+      <h2 className="mb-2 mt-6 text-sm font-medium opacity-70">
+        {t.manage.fileList} ({list.length})
+      </h2>
+      {list.length === 0 ? (
+        <p className="rounded border border-foreground/10 p-4 text-sm opacity-60">
+          {t.manage.empty}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {list.map((f) => (
+            <li
+              key={f.id}
+              className="flex items-center justify-between gap-3 rounded-lg border border-foreground/10 p-3"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm">{f.label || f.drive_file_id}</div>
+                <div className="truncate text-[11px] opacity-40">
+                  {f.created_at ? new Date(f.created_at).toLocaleString() : ''}
+                </div>
+              </div>
+              <DeleteModelFileButton
+                id={f.id}
+                label={t.manage.deleteFile}
+                confirmText={t.manage.confirmDeleteFile}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h2 className="mb-2 mt-6 text-sm font-medium opacity-70">
+        {t.manage.sheetList} ({sheets.length})
+      </h2>
+      {sheets.length === 0 ? (
+        <p className="rounded border border-foreground/10 p-4 text-sm opacity-60">
+          {t.manage.sheetEmpty}
+        </p>
+      ) : (
+        <SheetVisibilityList sheets={sheets} hint={t.manage.sheetHint} />
+      )}
+    </main>
+  );
+}

@@ -8,15 +8,31 @@
 // Kategori diambil dari NAMA FAMILY (bagian sebelum ':' di Name) — jauh lebih
 // bermakna daripada tipe IFC mentah. Kalau Name kosong, fallback ke tipe IFC.
 
-// #n = IFC<TYPE> ( '<22-char GlobalId>' , #owner , <Name: '...' atau $>
-const RE = /#\d+\s*=\s*IFC([A-Z0-9]+)\s*\(\s*'([0-9A-Za-z_$]{22})'\s*,\s*#\d+\s*,\s*(\$|'((?:[^'\\]|\\.)*)')/g;
+// #n = IFC<TYPE> ( '<22-char GlobalId>' , <OwnerHistory> , <Name: '...' atau $>
+//
+// OwnerHistory biasanya referensi (#42), tapi di IFC4 atributnya opsional dan
+// bisa ditulis "$". Kalau cuma menerima #n, seluruh elemen di file semacam itu
+// terlewat tanpa pesan error — jadi dua-duanya diterima.
+const RE =
+  /#\d+\s*=\s*IFC([A-Z0-9]+)\s*\(\s*'([0-9A-Za-z_$]{22})'\s*,\s*(?:#\d+|\$)\s*,\s*(\$|'((?:[^'\\]|\\.)*)')/g;
 
-// Buang entity yang bukan objek visual (tidak ada di GLB): tipe/definisi,
-// relasi, property set, port koneksi, ruang, bukaan, anotasi, grid, spasial.
+// Buang entity yang tidak mungkin punya geometri di GLB: tipe/definisi, relasi,
+// property set, port koneksi, dan pembungkus spasial.
 const EXCLUDE_EXACT = new Set([
-  'PROJECT', 'SITE', 'BUILDING', 'BUILDINGSTOREY',
-  'DISTRIBUTIONPORT', 'SPACE', 'OPENINGELEMENT', 'ANNOTATION', 'GRID',
+  'PROJECT', 'BUILDING', 'BUILDINGSTOREY', 'DISTRIBUTIONPORT',
 ]);
+
+// Entity yang BUKAN benda fisik, tapi IfcConvert sering tetap mengekspor
+// geometrinya ke GLB: garis grid, volume ruang, bukaan, anotasi. Di layar
+// hampir tidak terlihat, tapi sinar pemilihan tetap menembusnya lebih dulu —
+// jadi klik yang diarahkan ke kolom malah kena "hantu" ini.
+//
+// Dulu keempatnya dibuang dari tabel `elements`, akibatnya di viewer tampil
+// sebagai "Tanpa kategori" tanpa nama, tidak bisa dikenali maupun dimatikan.
+// Sekarang tetap dicatat, tapi kategorinya DIPAKSA satu per tipe (bukan dari
+// nama family — nama grid isinya cuma "A"/"1", bisa jadi puluhan kategori
+// sampah), supaya di viewer bisa langsung dikenali & dimatikan sekaligus.
+const NON_PHYSICAL = new Set(['SITE', 'SPACE', 'OPENINGELEMENT', 'ANNOTATION', 'GRID', 'GRIDAXIS']);
 
 function isExcluded(type) {
   return (
@@ -29,6 +45,7 @@ function isExcluded(type) {
 }
 
 function categoryFromName(rawName, type) {
+  if (NON_PHYSICAL.has(type)) return 'IFC' + type;
   if (!rawName) return 'IFC' + type;
   const family = rawName.split(':')[0].trim();
   return family || 'IFC' + type;

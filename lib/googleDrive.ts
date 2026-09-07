@@ -1,6 +1,88 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
+// Ambil folder ID yang bersih dari GOOGLE_DRIVE_FOLDER_ID. Toleran kalau
+// yang ke-paste malah URL lengkap (.../folders/<ID>?hl=ID) atau ada ?id=<ID>.
+function driveFolderId(): string {
+  const raw = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
+  const folders = raw.match(/\/folders\/([^/?#]+)/);
+  if (folders) return folders[1];
+  const idParam = raw.match(/[?&]id=([^&]+)/);
+  if (idParam) return idParam[1];
+  return raw;
+}
+
+// Access token OAuth yang fresh (di-refresh otomatis dari refresh_token).
+// Dipakai untuk bikin resumable upload session.
+async function getAccessToken(): Promise<string> {
+  const oauth2 = new google.auth.OAuth2(
+    process.env.GOOGLE_OAUTH_CLIENT_ID!,
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET!
+  );
+  oauth2.setCredentials({ refresh_token: process.env.GOOGLE_OAUTH_REFRESH_TOKEN! });
+  const { token } = await oauth2.getAccessToken();
+  if (!token) throw new Error('Gagal ambil access token Google (cek GOOGLE_OAUTH_REFRESH_TOKEN).');
+  return token;
+}
+
+// Bikin resumable upload session di folder Drive tujuan, kembalikan session URI.
+// Add-in lalu PUT byte GLB langsung ke URI ini (tanpa lewat server app -> hindari
+// limit body 4.5MB Vercel). URI-nya sudah pre-authorized, tidak perlu token lagi.
+export async function createResumableUpload(
+  fileName: string,
+  mimeType = 'model/gltf-binary'
+): Promise<string> {
+  const token = await getAccessToken();
+  const metadata = { name: fileName, parents: [driveFolderId()] };
+
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': mimeType,
+      },
+      body: JSON.stringify(metadata),
+    }
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Gagal bikin upload session Drive (${res.status}): ${body}`);
+  }
+  const uploadUri = res.headers.get('location');
+  if (!uploadUri) throw new Error('Drive tidak mengembalikan upload URI (header Location kosong).');
+  return uploadUri;
+}
+
+// Stream file dari Drive (buat proxy /api/model/[versionId]). Node Readable.
+export async function getDriveFileStream(fileId: string): Promise<Readable> {
+  return (await getDriveFile(fileId)).stream;
+}
+
+// Sama seperti di atas, TAPI ikut mengembalikan ukuran file kalau Drive
+// menyebutkannya. Ukuran ini diteruskan sebagai Content-Length supaya viewer
+// bisa menampilkan persentase unduhan yang benar — tanpa itu bar progres
+// terlihat "macet" pada model ratusan MB.
+//
+// Ukuran hanya dipakai kalau respons TIDAK dikompresi (content-encoding
+// kosong): kalau di-gzip, content-length adalah ukuran terkompresi sedangkan
+// yang mengalir ke klien sudah didekompresi — mengirimnya akan merusak respons.
+export async function getDriveFile(fileId: string): Promise<{ stream: Readable; size: number | null }> {
+  const drive = getDriveClient();
+  const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'stream' });
+  const raw = res.headers as unknown as { get?: (k: string) => string | null } & Record<string, string | undefined>;
+  const header = (k: string) => (typeof raw?.get === 'function' ? raw.get(k) : raw?.[k]) ?? '';
+  const encoding = String(header('content-encoding') || '').trim();
+  const len = Number(header('content-length'));
+  return {
+    stream: res.data as unknown as Readable,
+    size: !encoding && Number.isFinite(len) && len > 0 ? len : null,
+  };
+}
+
 // OAuth user (bukan service account): file .rvt dimiliki akun Google kamu
 // sendiri, jadi masuk kuota 15GB gratis — bukan kuota ~0 service account
 // yang bikin upload file besar gagal "storage quota exceeded".
@@ -26,7 +108,7 @@ export async function uploadRvtFile(fileName: string, fileBuffer: Buffer) {
   const res = await drive.files.create({
     requestBody: {
       name: fileName,
-      parents: [process.env.GOOGLE_DRIVE_FOLDER_ID!],
+      parents: [driveFolderId()],
     },
     media: {
       mimeType: 'application/octet-stream',

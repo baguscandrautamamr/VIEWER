@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#0a0a0a"/>
+  <!-- Kubus isometrik = model 3D -->
+  <g fill="none" stroke="#ffc107" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M32 12 L52 23 L52 41 L32 52 L12 41 L12 23 Z"/>
+    <path d="M32 12 L32 32 M12 23 L32 32 L52 23"/>
+  </g>
+</svg>

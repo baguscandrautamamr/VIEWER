@@ -1,9 +1,13 @@
 # Revit Web Viewer
 
-Website presentasi client: 3D view dari Revit (isolate-on-click), sheet PDF,
+Website presentasi client: 3D view dari Revit (pilih elemen, isolate, ukur), sheet PDF,
 auto-update saat model di-push, download file RVT.
 
 Spec lengkap: lihat `REVIT-WEB-VIEWER-SETUP.md`.
+
+**Mau memodifikasi project ini?** Baca **[`CATATAN.md`](CATATAN.md)** dulu —
+berisi riwayat perubahan, peta file, konvensi commit, dan catatan jebakan
+teknis yang sudah pernah kena.
 
 ## Status
 
@@ -34,6 +38,9 @@ itu langkah berikutnya di Fase 1 (lihat spec bagian 8).
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret |
 | `GOOGLE_OAUTH_REFRESH_TOKEN` | Refresh token, diambil sekali via `scripts/get-refresh-token.mjs` |
 | `GOOGLE_DRIVE_FOLDER_ID` | Folder tujuan upload file RVT |
+| `ANTHROPIC_API_KEY` | (Opsional) Kunci Messages API untuk **Asisten AI** di viewer presentasi. Server-side only. Tanpa ini fitur AI otomatis disembunyikan |
+| `ANTHROPIC_BASE_URL` | (Opsional) Proxy yang kompatibel Messages API, mis. `https://api.vikey.ai` |
+| `AI_MODEL` | (Opsional) Model AI. Bawaan `claude-opus-5`; lewat proxy vikey bisa `openai/gpt-5.6-luna` |
 
 Copy `.env.local.example` ke `.env.local` dan isi value asli sebelum `npm run dev`.
 
@@ -49,7 +56,197 @@ npm install
 npm run dev      # development, http://localhost:3000
 npm run build    # production build
 npm start        # jalankan hasil build
+npm test         # uji identitas elemen + penggabungan/penggambaran mode presentasi
 ```
+
+## Mode presentasi (viewer untuk client) + Asisten AI
+
+Halaman `/present/[projectId]` sekarang punya **dua wajah**, dipilih lewat saklar
+di tengah-atas viewer (pilihan diingat di browser):
+
+- **Mode presentasi** (bawaan) — `components/showcase/*`, tampilan gaya
+  *virtual plant tour*: model monokrom abu-abu dengan sorotan hijau, lantai grid
+  + bayangan lembut, panel gelap kaca. Dibuat untuk dipertontonkan ke client.
+- **Mode teknis** — viewer lama (`components/ModelViewer.tsx`): ukur, section
+  box, coret markup, pohon struktur, dll. Semua fitur lama tetap ada.
+
+### Isi mode presentasi
+
+| Bagian | Fungsi |
+|---|---|
+| **Mode jalan / Mode orbit** (tengah atas) | Jalan kaki di eye level 1,7 m (**W/A/S/D**, Shift lari, **Q/E** turun/naik, seret untuk menoleh, roda mouse maju/mundur) atau orbit biasa |
+| **Jelajahi model** (panel kiri) | Cari elemen, label elemen, **sorot sistem** per disiplin (Struktur / Arsitektur / Elektrikal & elektronik / Plumbing / HVAC / Proses / Pemadam kebakaran / Tapak — dideteksi dari kata kunci nama family, lihat `lib/showcase/disciplines.ts`), denah 2D/3D, titik pandang (pemberhentian tur + preset tinggi mata), gaya monokrom/warna asli, bayangan, putar otomatis, reset, kembali ke pintu masuk, simpan gambar PNG |
+| **Tur terpandu** (dock bawah) | Pemberhentian dibuat **otomatis** dari isi model: ikhtisar → tiap disiplin (disorot hijau) → jalan kaki → tampak atas. Kamera beranimasi antar pemberhentian. Tombol **Narasi AI** menulis ulang judul + narasi tiap pemberhentian |
+| **Susun tur** (dock bawah, hanya admin) | Simpan pandangan kamera saat ini (mode jalan/orbit/denah + sorotan aktif) sebagai pemberhentian, atur urutan, edit judul/narasi, lalu **Simpan tur** ke database (tabel `tour_stops`). Kalau ada tur tersimpan, itulah yang dipakai client; kalau kosong, tur otomatis. Tombol "Isi dari tur otomatis" menyalin tur otomatis sebagai titik awal |
+| **Navigator elemen** (dock bawah, atau `/`) | Cari nama/kategori/kata kunci, hasil dikelompokkan per kategori, klik → kamera terbang & elemen disorot |
+| **Inspeksi elemen** (panel kanan) | Muncul saat objek diklik (atau **E** di mode jalan pada objek di tengah layar): nama, kategori, GlobalId, dimensi & elevasi dari kotak batas, elemen sejenis & sekitar, **Jelaskan dengan AI**, ke elemen, sorot sejenis |
+| **Asisten AI** (dock bawah) | Obrolan tentang model. AI menerima ringkasan model (kategori, jumlah, contoh nama, elemen terpilih) dan bisa **menggerakkan viewer**: terbang ke elemen/kategori, menyorot, ganti mode jalan/orbit/denah, mulai tur, label |
+| **Navigasi skematik** (kanan bawah) | Minimap tampak atas: jejak elemen, posisi & arah kamera, nomor pemberhentian tur. Klik minimap = pindah ke titik itu |
+| Chip kanan atas | Area terdekat (dari pemberhentian tur) + tinggi mata |
+
+Pintasan: **E** inspeksi · **F** fokus elemen terpilih · **T** tur · **L** label ·
+**R** reset · **/** cari · **Esc** tutup.
+
+### Kenapa mode presentasi tetap ringan di model besar
+
+Model Revit besar punya puluhan ribu elemen. Mode presentasi **menggabungkan
+seluruh geometri jadi dua mesh** (padat & tembus pandang) saat dimuat, jadi tiap
+frame cuma 2 draw call — bukan puluhan ribu. Sorotan/seleksi/gaya ditulis
+sebagai **warna per-vertex** (Uint8, 4 byte) dan bayangan dirender sekali
+(shadow map statis).
+
+Geometri yang **dipakai berulang** (tipe family yang sama muncul puluhan kali)
+tidak ikut digabung — itu dirender sebagai `InstancedMesh`: geometrinya
+disimpan sekali, tiap elemen hanya menyumbang satu matriks + satu warna. Ini
+penting: menyalinnya berulang pernah membuat model 3,5 juta segitiga unik
+mengembang jadi 34 juta segitiga (~3,2 GB) sehingga browser melepas konteks
+WebGL dan layar jadi kosong. Uji A/B pada model yang sama: 563 MB → 199 MB.
+
+Geometri gabungan dipecah lagi per **petak denah**, jadi petak yang di luar
+layar dilewati GPU (frustum culling) — terasa saat berjalan di dalam bangunan
+besar. Memilih objek **tidak memakai indeks BVH** (membangunnya membekukan
+halaman pada model besar): sinar diuji ke kotak batas tiap elemen lalu ke
+segitiga beberapa kandidat terdekat — 6–13 ms per klik pada 60 ribu elemen.
+
+Penggabungan dikerjakan **sekali** dan **dicicil per potongan 8 ms**
+(dijadwalkan sendiri lewat `MessageChannel`, bukan menumpang render loop dan
+bukan `setTimeout` yang diklem browser). Potongan bisa berhenti di tengah satu
+mesh raksasa, jadi satu elemen besar pun tidak memblokir halaman. Selama itu tombol **Mode teknis** tetap bisa diklik
+sebagai jalan keluar. Uji 60 ribu elemen: siap ~9 detik (sebelum diperbaiki: 64
+detik), jeda JavaScript terpanjang setelah siap ~0,2 detik, dan biaya per frame
+~5× lebih ringan daripada mode teknis pada model yang sama.
+
+Frame yang **tidak berubah tidak digambar ulang**: selama kamera diam dan
+tidak ada perubahan warna/ukuran, GPU menganggur. Tab yang disembunyikan juga
+berhenti menggambar.
+
+Untuk model sangat berat, viewer menurunkan kualitas sendiri: di atas 6 juta
+segitiga **bayangan dimatikan otomatis**, dan kalau frame tetap berat
+resolusinya diturunkan bertahap (dengan pemberitahuan, bisa dinyalakan lagi di
+panel kiri). Kalau browser tetap melepas konteks WebGL, viewer menampilkan
+pesan jelas — bukan layar kosong.
+
+Panel **?** kanan atas menunjukkan jumlah elemen, segitiga yang digambar,
+segitiga unik, jumlah geometri berulang, dan FPS — kirimkan angka itu kalau
+tampilan masih terasa berat.
+
+Konsekuensinya: tekstur material tidak ikut (warna saja) — untuk model IFC ini
+tidak terasa. Mode teknis tetap merender per elemen seperti semula.
+
+Kalau bar progres terlihat lambat: ukuran file diteruskan sebagai
+`Content-Length` dari Drive supaya persennya benar; kalau Drive tidak
+menyebutkan ukuran, yang tampil adalah **MB terunduh** dengan bar berjalan.
+
+### Menyimpan tur terpandu
+
+Jalankan blok `tour_stops` di `supabase/schema.sql` (aman diulang). Buka link
+presentasi sebagai admin (cookie `VIEWER_ADMIN_PASSWORD`; kalau password tidak
+di-set, semua terbuka) → dock **Susun tur**.
+
+### Cara kerja AI (dan keamanannya)
+
+- Browser memanggil `POST /api/ai`; route itu yang memanggil Messages API lewat
+  SDK resmi `@anthropic-ai/sdk`. **Kunci API tidak pernah sampai ke browser.**
+- Route dijaga token akses client (`?t=` di link presentasi, dicek ke
+  `projects.client_access_token`) + pembatas laju per IP, supaya endpoint tidak
+  bisa dipakai orang luar untuk membakar kuota.
+- Model diminta menulis aksi sebagai baris `[[action:{...}]]` di dalam
+  jawabannya (format teks, bukan tool-use API) — sengaja, supaya jalan di semua
+  model/proxy yang kompatibel Messages API, termasuk model non-Claude lewat proxy
+  seperti vikey. Viewer memparse baris itu, menjalankan aksinya, dan
+  menyembunyikannya dari teks. Daftar aksi: `lib/showcase/aiActions.ts`.
+- Konteks yang dikirim ringkas (`lib/showcase/aiPrompt.ts`): ukuran model,
+  jumlah elemen per kategori/disiplin + maksimal 4 contoh nama per kategori,
+  elemen terpilih + 5 tetangganya. Model besar (puluhan ribu elemen) tetap
+  hemat token.
+- Tanpa `ANTHROPIC_API_KEY`, `GET /api/ai` menjawab `configured: false` dan
+  semua tombol AI disembunyikan — viewer tetap berfungsi penuh.
+
+Set env di Vercel (Production & Preview), lalu redeploy:
+
+```
+ANTHROPIC_API_KEY=<kunci>
+ANTHROPIC_BASE_URL=https://api.vikey.ai      # kalau lewat vikey
+AI_MODEL=openai/gpt-5.6-luna                  # atau kosongkan -> claude-opus-5
+```
+
+## Fitur viewer 3D (mode teknis)
+
+### Kontrol navigasi
+
+| Input | Fungsi |
+|---|---|
+| Klik kiri + geser | Putar model (orbit) |
+| Klik kiri (tanpa geser) | Pilih elemen — kotak batas, model lain tetap utuh |
+| **Shift + klik kiri (tanpa geser)** | Pilih objek di **balik** objek yang sekarang |
+| Scroll | Zoom |
+| **Klik kiri + geser** (mode Diam) | Lihat sekeliling — kiri/kanan & atas/bawah, pelan |
+| **Shift + roda tengah + geser** | Putar model (orbit) |
+| **Shift + scroll** | Pandangan kamera atas/bawah |
+| **Shift + klik kiri + geser** | Pandangan kamera kiri/kanan |
+| **W / S** | Maju / mundur — **rata**, tidak menukik |
+| **A / D** | Geser kiri / kanan |
+| **Q / E** | Naik / turun |
+
+Tombol keyboard diabaikan saat sedang mengetik di kolom cari. Pandangan
+kiri/kanan & atas/bawah memutar kamera **di tempat** (posisi tidak pindah),
+berbeda dengan orbit yang mengelilingi model.
+
+Toolbar kiri (gaya Navisworks) + kontrol kanan atas:
+
+- **Struktur (☰)** — Selection Tree hierarki *Kategori → Elemen*. Checkbox
+  untuk show/hide per kategori/elemen, klik nama untuk memilih + fokus, ada
+  kolom cari. Di kepala panel ada **☑ Semua** dan **☐ Kosongkan** —
+  "Kosongkan" menyembunyikan semuanya supaya tinggal mencentang satu kategori
+  yang mau dilihat (cara tercepat mengisolasi satu disiplin).
+- **Pilih elemen** — klik objek di 3D: elemen ditandai **kotak batas** dan
+  model lain **tetap utuh**, jadi konteks sekelilingnya masih terlihat (gaya
+  Navisworks). Kotaknya meliputi seluruh elemen, termasuk elemen yang
+  geometrinya terpecah beberapa bagian.
+- **Shift + klik = tembus objek bertumpuk** — kalau yang kena klik bukan objek
+  yang Anda incar (sering terjadi: ada elemen lain di depannya), tekan **Shift +
+  klik di titik yang sama** untuk maju ke objek di belakangnya, berulang sampai
+  ketemu. Kotak objek terpilih menampilkan penanda **2/5 ⇧** kalau di titik itu
+  ada beberapa objek bertumpuk. Kamera sengaja tidak bergerak saat memilah.
+- **Auto-fokus yang tahu diri** — kamera **diam** kalau elemen yang dipilih
+  sudah kelihatan jelas (lebih dari 25% tinggi layar dan ada di dalam layar).
+  Kamera baru meluncur mendekat kalau elemen tampil kecil atau berada di luar
+  layar — misalnya saat dipilih dari panel Struktur. Gerakannya beranimasi,
+  arah pandang dipertahankan, dan berhenti begitu mouse/keyboard disentuh.
+  Tombol **Fokus** memaksa kamera mendekat ke elemen terpilih kapan pun.
+- **Isolate** — **bawaannya mati**. Nyalakan kalau memang ingin semua objek lain
+  diredupkan saat satu objek dipilih (per objek atau per kategori); berlaku
+  langsung ke elemen yang sedang terpilih.
+- **Objek terpilih** — kotak ringkas di kiri bawah: kategori, nama, GlobalId,
+  **palet warna** (↺ mengembalikan warna asli) dan tombol **Sembunyikan**.
+  Warna bertahan walaupun isolate dipakai. Keduanya **sementara** — hanya di
+  layar kamu, tidak tersimpan ke database, hilang saat halaman di-refresh.
+  Objek yang disembunyikan centangnya ikut lepas di panel Struktur, jadi selalu
+  bisa dikembalikan dari sana atau lewat **☑ Semua**.
+- **Putar / Geser (Pan) / Walkthrough** — tool navigasi. Pan = seret untuk
+  menggeser; Walkthrough = jalan first-person: **W/S** maju-mundur, **A/D**
+  geser, **Q** naik, **E** turun, mouse lihat, **Esc** keluar.
+- **Kecepatan (⚡)** — slider di dock kiri untuk mengatur kecepatan gerak
+  keyboard/walkthrough (0.1×–3×) supaya jalan di 3D tidak terlalu cepat.
+- **Tampilan (💡)** — atur **kecerahan** model (0.4×–2.5×) dan **warna latar**
+  (Ikut tema / Terang / Putih / Gelap). Pilih *Putih* kalau ingin tampilan
+  mirip Revit. Pilihan tersimpan di browser.
+- **Pintasan (?)** — daftar lengkap pintasan keyboard & mouse.
+- **Ukur (Measure)** — klik 2 titik pada model, jarak tampil (meter) + garis &
+  titik di 3D. Begitu titik kedua diklik, **selisih per sumbu X / Y / Z** ikut
+  tampil di bawah angka jaraknya — **Z = tinggi** (naik/turun), X & Y mendatar,
+  mengikuti kebiasaan Revit. Ukuran titik konstan di layar; label jarak tetap
+  menempel saat kamera digerakkan.
+- **Layar penuh (⛶)** — perbesar viewer ke seluruh layar; dock & panel ikut
+  tampil. Tekan lagi atau `Esc` untuk keluar.
+- **Diam** — kunci putaran supaya model tidak berputar tak sengaja saat
+  presentasi. Klik kiri berhenti memutar (seleksi elemen tetap jalan), inersia
+  dimatikan sehingga berhenti seketika. Sebagai gantinya **tahan klik kiri +
+  geser** untuk melihat sekeliling secara perlahan (kiri/kanan & atas/bawah);
+  klik tanpa geser tetap memilih elemen. Zoom, geser, dan keyboard
+  tetap berfungsi; memutar model tetap bisa lewat **Shift + roda tengah**.
+- Ditambah fitur lama: Section box (6 slider), Coret markup, Fokus,
+  auto-update saat model di-push.
 
 ## Setup database
 
@@ -77,6 +274,62 @@ Kalau cuma mau generate SQL kategori untuk di-paste manual ke SQL Editor:
 ```bash
 node scripts/ifc-to-elements-sql.mjs <file.ifc> <project_id> > elements.sql
 ```
+
+## Kecilkan GLB besar (Draco) — untuk model >200MB
+
+Model IFC besar sering menghasilkan GLB ratusan MB yang berat di-load di web.
+`push-model.mjs` sudah **otomatis** meng-kompres GLB dengan Draco
+(KHR_draco_mesh_compression) sebelum upload — biasanya hemat 70–90%.
+
+### Alur manual (upload lewat website)
+
+**Paling praktis — 1 command dari IFC langsung jadi GLB kecil siap upload:**
+
+```bash
+node scripts/ifc-to-web.mjs <file.ifc> <project_id>
+```
+
+Ini menjalankan IfcConvert (IFC→GLB), kompres Draco, **dan mengirim nama +
+kategori tiap elemen ke tabel `elements`**. Hasilnya `<nama-ifc>-web.glb` —
+tinggal upload di halaman Kelola (Upload model GLB).
+Butuh `IFCCONVERT_PATH` di `.env.local` (atau `IfcConvert` ada di PATH).
+
+> **Tidak mau pakai Command Prompt?** Di halaman Kelola ada tombol
+> **"Impor nama elemen dari IFC"** — pilih file `.ifc`, selesai. File-nya tidak
+> di-upload (dibaca langsung di browser, yang dikirim cuma daftar nama &
+> kategori), dan model GLB tidak perlu diganti.
+
+> **Sebagian objek GLB dinamai angka, bukan GlobalId** — biasanya fitting
+> seperti tee/bend cable tray. Angka itu ElementId Revit. Viewer sudah
+> menjodohkannya lewat ekor nama IFC (`Family:Type:1073322`), jadi elemen
+> semacam ini tetap dapat nama & kategori tanpa impor ulang.
+
+> **`project_id` penting.** IfcConvert dijalankan dengan `--use-element-guids`,
+> jadi objek di GLB dinamai GlobalId (kode 22 karakter) — nama & kategori yang
+> bisa dibaca manusia hanya ada di tabel `elements`. Tanpa `project_id`, semua
+> elemen di viewer tampil sebagai kode acak dan masuk kategori "Default".
+> Halaman Kelola akan menampilkan peringatan kalau tabel ini masih kosong.
+>
+> Untuk model yang sudah terlanjur di-upload, tidak perlu convert ulang —
+> jalankan command ini sekali dengan file IFC-nya, GLB-nya tidak berubah.
+
+**Kalau GLB-nya sudah ada** (convert sendiri via Blender / converter online),
+tinggal kompres saja sebelum upload:
+
+```bash
+node scripts/compress-glb.mjs <input.glb> [output.glb]
+```
+
+Hasilnya (`<input>-draco.glb`) yang di-upload di halaman Kelola. Kalau file
+sangat besar dan kena "heap out of memory", jalankan dengan heap lebih besar:
+
+```bash
+node --max-old-space-size=8192 scripts/compress-glb.mjs <input.glb>
+```
+
+Kompresi butuh dependency dev (`@gltf-transform/*`, `draco3dgltf`) — sudah
+masuk `package.json`, cukup `npm install`. Viewer sudah mendukung GLB Draco
+(decoder di-serve dari `public/draco`, tanpa CDN).
 
 ## Deploy
 

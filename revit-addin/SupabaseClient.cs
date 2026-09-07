@@ -8,6 +8,21 @@ using Newtonsoft.Json.Linq;
 
 namespace RevitWebViewer
 {
+    // Satu baris tabel `projects`, dipakai form Pengaturan buat pilih/buat
+    // project tanpa buka SQL Editor.
+    public class ProjectRow
+    {
+        public string Id;
+        public string Name;
+        public string Token;
+
+        // Ditampilkan di ListBox picker.
+        public override string ToString()
+        {
+            return (string.IsNullOrEmpty(Name) ? "(tanpa nama)" : Name) + "   —   " + Id;
+        }
+    }
+
     // Wrapper HttpClient untuk Supabase Storage + PostgREST. Meniru langkah
     // di scripts/push-model.mjs. Pakai service role key (server-side).
     public class SupabaseClient : IDisposable
@@ -48,13 +63,13 @@ namespace RevitWebViewer
             return _cfg.SupabaseUrl + "/storage/v1/object/public/" + _cfg.Bucket + "/" + storagePath;
         }
 
-        public async Task<string> InsertModelVersionAsync(int version, string publicUrl, string pushedBy)
+        public async Task<string> InsertModelVersionAsync(int version, string glbDriveFileId, string pushedBy)
         {
             var payload = new JObject
             {
                 ["project_id"] = _cfg.ProjectId,
                 ["version_number"] = version,
-                ["glb_storage_path"] = publicUrl,
+                ["glb_drive_file_id"] = glbDriveFileId,
                 ["pushed_by"] = pushedBy
             };
             var res = await PostJsonAsync(_cfg.SupabaseUrl + "/rest/v1/model_versions",
@@ -88,6 +103,32 @@ namespace RevitWebViewer
             }
         }
 
+        // Hapus semua sheet project ini (dipanggil sebelum sync ulang biar tidak dobel).
+        public async Task DeleteSheetsAsync()
+        {
+            string url = _cfg.SupabaseUrl + "/rest/v1/sheets?project_id=eq." + _cfg.ProjectId;
+            var req = new HttpRequestMessage(HttpMethod.Delete, url);
+            req.Headers.TryAddWithoutValidation("Prefer", "return=minimal");
+            var res = await _http.SendAsync(req);
+            await EnsureOk(res, "Hapus sheet lama");
+        }
+
+        // Insert 1 sheet (PDF di Drive + preset kamera).
+        public async Task InsertSheetAsync(string number, string name, string pdfDriveFileId, string preset, int sortOrder)
+        {
+            var payload = new JObject
+            {
+                ["project_id"] = _cfg.ProjectId,
+                ["sheet_number"] = number,
+                ["sheet_name"] = name != null ? new JValue(name) : JValue.CreateNull(),
+                ["pdf_drive_file_id"] = pdfDriveFileId,
+                ["camera_preset"] = preset,
+                ["sort_order"] = sortOrder
+            };
+            var res = await PostJsonAsync(_cfg.SupabaseUrl + "/rest/v1/sheets", payload.ToString(), "return=minimal");
+            await EnsureOk(res, "Insert sheet");
+        }
+
         public async Task<string> GetTokenAsync()
         {
             try
@@ -98,6 +139,41 @@ namespace RevitWebViewer
                 return arr.Count > 0 ? (string)arr[0]["client_access_token"] : null;
             }
             catch { return null; }
+        }
+
+        // Daftar semua project (buat picker di form Pengaturan). Butuh service
+        // role key karena RLS memblok anon di tabel projects.
+        public async Task<List<ProjectRow>> ListProjectsAsync()
+        {
+            string url = _cfg.SupabaseUrl +
+                "/rest/v1/projects?select=id,name,client_access_token&order=created_at.desc";
+            var arr = JArray.Parse(await GetStringAsync(url));
+            var list = new List<ProjectRow>();
+            foreach (var it in arr)
+            {
+                list.Add(new ProjectRow
+                {
+                    Id = (string)it["id"],
+                    Name = (string)it["name"],
+                    Token = (string)it["client_access_token"]
+                });
+            }
+            return list;
+        }
+
+        // Buat project baru langsung dari Revit -> kembalikan id (UUID) hasil.
+        public async Task<string> CreateProjectAsync(string name, string token)
+        {
+            var payload = new JObject
+            {
+                ["name"] = name,
+                ["client_access_token"] = token
+            };
+            var res = await PostJsonAsync(_cfg.SupabaseUrl + "/rest/v1/projects",
+                payload.ToString(), "return=representation");
+            await EnsureOk(res, "Buat project");
+            var arr = JArray.Parse(await res.Content.ReadAsStringAsync());
+            return arr.Count > 0 ? (string)arr[0]["id"] : null;
         }
 
         private async Task<string> GetStringAsync(string url)

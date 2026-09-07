@@ -272,6 +272,10 @@ export class ShowcaseEngine {
     new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
   ];
   private clipMaterials: THREE.Material[] = [];
+  // Bingkai kotak potong di 3D (gaya section box Navisworks/Mode teknis):
+  // garis tepi + sudut tebal, mengikuti posisi 6 slider. Dipasang ke scene
+  // (bukan modelGroup) supaya luput dari raycast pemilihan.
+  private sectionBox: THREE.LineSegments | null = null;
   private cMono = u8(COLORS.mono);
   private cMonoGlass = u8(COLORS.monoGlass);
   private cHighlight = u8(COLORS.highlight);
@@ -1024,6 +1028,7 @@ export class ShowcaseEngine {
     this.labelCandidates = [];
     this.minimapRects = [];
     this.clipMaterials = [];
+    if (this.sectionBox) this.sectionBox.visible = false;
   }
 
   // Geometri sumber GLTF dilepas saat model diganti/dibersihkan. Sub-geometri
@@ -1242,7 +1247,59 @@ export class ShowcaseEngine {
       m.clipShadows = true;
       m.needsUpdate = true;
     }
+    this.updateSectionBox();
     this.renderDirty = true;
+  }
+
+  // Gambar ulang bingkai kotak potong mengikuti 6 slider. Tampil hanya saat
+  // section aktif. depthTest=false supaya kotaknya tetap terlihat walau di
+  // balik dinding (sama seperti kotak penanda elemen di Mode teknis).
+  private updateSectionBox() {
+    if (!this.sectionOn) {
+      if (this.sectionBox) this.sectionBox.visible = false;
+      return;
+    }
+    const [hx, hy, hz] = this.bounds.max.map((v, i) => (v - this.bounds.min[i]) / 2 || 1) as [number, number, number];
+    const c = this.sectionClip;
+    const cx = (this.bounds.min[0] + this.bounds.max[0]) / 2;
+    const cy = (this.bounds.min[1] + this.bounds.max[1]) / 2;
+    const cz = (this.bounds.min[2] + this.bounds.max[2]) / 2;
+    // Posisi dunia tiap bidang potong. Plane X+ (normal −X, konstanta
+    // hx*xMax) mempertahankan x ≤ hx*xMax, jadi bidangnya di cx + hx*xMax;
+    // X− (normal +X, konstanta hx*xMin) mempertahankan x ≥ −hx*xMin, jadi
+    // bidangnya di cx − hx*xMin. Pola sama untuk Y dan Z.
+    const x0 = cx + hx * c.xMax;
+    const x1 = cx - hx * c.xMin;
+    const y0 = cy + hy * c.yMax;
+    const y1 = cy - hy * c.yMin;
+    const z0 = cz + hz * c.zMax;
+    const z1 = cz - hz * c.zMin;
+    // 12 rusuk kotak, tiap rusuk 2 titik.
+    const v: number[] = [];
+    const edge = (a: [number, number, number], b: [number, number, number]) => v.push(...a, ...b);
+    const corners = (x: number, y: number, z: number): [number, number, number] => [x, y, z];
+    const xIn = [x0, x1], yIn = [y0, y1], zIn = [z0, z1];
+    for (const x of xIn) for (const y of yIn) edge(corners(x, y, z0), corners(x, y, z1)); // 4 rusuk sejajar Z
+    for (const y of yIn) for (const z of zIn) edge(corners(x0, y, z), corners(x1, y, z)); // 4 rusuk sejajar X
+    for (const x of xIn) for (const z of zIn) edge(corners(x, y0, z), corners(x, y1, z)); // 4 rusuk sejajar Y
+    if (!this.sectionBox) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24 * 3), 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: COLORS.highlight,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+      });
+      this.sectionBox = new THREE.LineSegments(geo, mat);
+      this.sectionBox.renderOrder = 998;
+      this.sectionBox.frustumCulled = false;
+      this.scene.add(this.sectionBox);
+    }
+    const attr = this.sectionBox.geometry.getAttribute('position') as THREE.BufferAttribute;
+    (attr.array as Float32Array).set(v);
+    attr.needsUpdate = true;
+    this.sectionBox.visible = true;
   }
 
   setSection(on: boolean, clip: SectionClip) {
@@ -1490,6 +1547,20 @@ export class ShowcaseEngine {
       this.mode = 'walk';
       if (prev !== 'walk') this.syncYawPitchFromCamera();
       this.flyTo(pose, opts.dur ?? 1.0);
+    } else if (mode === 'static') {
+      // Kamera beku: kunci putaran & zoom di OrbitControls, posisi sekarang
+      // dipertahankan (atau terbang ke pose yang diberikan). Klik tetap bisa
+      // memilih elemen — hanya navigasinya yang dimatikan.
+      this.controls.enabled = false;
+      this.mode = 'static';
+      if (prev === 'walk') {
+        // Dari mode jalan: angkat sedikit supaya pusat putar masuk akal kalau
+        // nanti kembali ke orbit, dan target = titik yang sedang dilihat.
+        const pose = opts.pose ?? this.orbitPoseFromWalk();
+        this.setPoseImmediate(pose);
+      } else if (opts.pose) {
+        this.setPoseImmediate(opts.pose);
+      }
     } else {
       this.mode = 'orbit';
       this.controls.enabled = true;
@@ -1687,6 +1758,11 @@ export class ShowcaseEngine {
       }
       return;
     }
+    // Mode statis: kamera beku, jadi tooltip hover tidak perlu dihitung.
+    if (this.mode === 'static') {
+      if (this.hoverGid) this.setHover(null, 0, 0);
+      return;
+    }
     if (this.mode === 'orbit' && !this.tween && !this.merge) {
       const now = performance.now();
       if (now - this.lastHover < 80) return;
@@ -1759,6 +1835,7 @@ export class ShowcaseEngine {
 
   private stepKeys(dt: number) {
     if (this.keys.size === 0) return;
+    if (this.mode === 'static') return; // kamera beku — keyboard tidak menggerakkan apa pun
     const run = this.keys.has('shift') ? 2.6 : 1;
     const v = this.walkSpeed * run * dt;
     const fwd = (this.keys.has('w') || this.keys.has('arrowup') ? 1 : 0) - (this.keys.has('s') || this.keys.has('arrowdown') ? 1 : 0);
@@ -2274,6 +2351,10 @@ export class ShowcaseEngine {
     this.mergeChannel?.port1.close();
     this.mergeChannel?.port2.close();
     this.mergeChannel = null;
+    this.sectionBox?.geometry.dispose();
+    (this.sectionBox?.material as THREE.Material | undefined)?.dispose();
+    this.sectionBox?.removeFromParent();
+    this.sectionBox = null;
     this.controls.dispose();
     this.clearModel();
     this.ground?.geometry.dispose();

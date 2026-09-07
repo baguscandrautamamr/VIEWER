@@ -270,3 +270,68 @@ test('resumed indexed material groups keep original colors and index offsets', (
   assert.deepEqual(Array.from(colors.slice(0, 4)), [255, 0, 0, 255]);
   assert.deepEqual(Array.from(colors.slice(16, 20)), [0, 255, 0, 255]);
 });
+
+// --- Mode statis & kotak section -------------------------------------------
+
+function sectionHarness() {
+  const engine = Object.create(ShowcaseEngine.prototype);
+  engine.bounds = { min: [-10, -10, -10], max: [10, 10, 10] };
+  engine.sectionOn = false;
+  engine.sectionClip = { xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
+  engine.clipPlanes = [
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 0), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+    new THREE.Plane(new THREE.Vector3(0, 0, -1), 0), new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+  ];
+  engine.clipMaterials = [];
+  engine.sectionBox = null;
+  engine.scene = new THREE.Scene();
+  engine.renderDirty = false;
+  return engine;
+}
+
+test('section box frame follows the clip sliders and matches the cutting planes', () => {
+  const engine = sectionHarness();
+  engine.sectionOn = true;
+  engine.sectionClip = { xMin: 1, xMax: 0.5, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
+  engine.refreshClipping();
+  assert.ok(engine.sectionBox, 'frame is created when section is on');
+  assert.equal(engine.sectionBox.parent, engine.scene);
+  assert.equal(engine.sectionBox.visible, true);
+  // Kotak harus pas di bidang potong: sisi X+ di x = cx + hx*xMax = 0 + 10*0.5.
+  const attr = engine.sectionBox.geometry.getAttribute('position');
+  const xs = [];
+  for (let i = 0; i < attr.count; i++) xs.push(attr.getX(i));
+  for (const x of xs) assert.ok(x <= 5 + 1e-6, `no vertex beyond the X+ plane (x=${x})`);
+  assert.ok(xs.some((x) => Math.abs(x - 5) < 1e-6), 'one face sits exactly on the X+ plane');
+  // Sisi lain tetap di tepi model (xMax sisi − = 1 → x = −10).
+  assert.ok(xs.some((x) => Math.abs(x + 10) < 1e-6), 'X− face stays at the model edge');
+  // Matikan section: kotak ikut hilang dari layar.
+  engine.sectionOn = false;
+  engine.refreshClipping();
+  assert.equal(engine.sectionBox.visible, false);
+});
+
+test('static mode freezes the camera: controls off, keyboard ignored, pose kept', () => {
+  const engine = sectionHarness();
+  const events = [];
+  engine.mode = 'orbit';
+  engine.controls = { enableRotate: true, autoRotate: false, enabled: true, target: new THREE.Vector3() };
+  engine.camera = new THREE.PerspectiveCamera();
+  engine.camera.position.set(30, 20, 30);
+  engine.emit = (ev) => events.push(ev);
+  engine.setMode('static');
+  assert.equal(engine.mode, 'static');
+  assert.equal(engine.controls.enabled, false, 'orbit controls are locked');
+  assert.ok(events.includes('mode'), 'mode event emitted');
+  // Keyboard tidak menggerakkan kamera apa pun di mode statis.
+  engine.keys = new Set(['w']);
+  const before = engine.camera.position.clone();
+  engine.stepKeys(0.016);
+  assert.deepEqual(engine.camera.position.toArray(), before.toArray());
+  // Kembali ke orbit: kontrol menyala lagi, kamera lanjut dari posisi statis.
+  engine.setMode('orbit');
+  assert.equal(engine.mode, 'orbit');
+  assert.equal(engine.controls.enabled, true);
+  assert.ok(engine.camera.position.distanceTo(before) < 1e-6, 'position preserved');
+});

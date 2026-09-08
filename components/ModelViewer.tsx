@@ -2124,11 +2124,21 @@ export default function ModelViewer({
         </div>
       )}
 
-      {/* Layer coret-coret (canvas overlay screen space). */}
+      {/* Layer coret-coret (canvas overlay screen space). Viewer ini memakai
+          preserveDrawingBuffer:true, jadi cukup render ulang lalu capture. */}
       <MarkupOverlay
         active={markupOn}
         strings={locales[locale].markup}
-        getViewerCanvas={() => rendererRef.current?.domElement ?? null}
+        getViewerSource={() => {
+          const renderer = rendererRef.current;
+          const scene = sceneRef.current;
+          const camera = cameraRef.current;
+          if (!renderer || !scene || !camera) return null;
+          return {
+            renderNow: () => renderer.render(scene, camera),
+            getCanvas: () => renderer.domElement,
+          };
+        }}
       />
     </div>
   );

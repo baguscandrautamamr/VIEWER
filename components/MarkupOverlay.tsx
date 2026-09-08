@@ -13,6 +13,15 @@ export interface MarkupStrings {
   frozen: string;
 }
 
+// getCanvas harus menggambar frame 3D terbaru SEKALIGUS mengembalikan canvas
+// WebGL-nya. Buffer canvas dengan preserveDrawingBuffer:false dikosongkan
+// browser setelah tiap frame, jadi drawImage harus terjadi dalam siklus JS
+// yang sama dengan render (lihat renderNow() di engine).
+export interface MarkupViewerSource {
+  renderNow: () => void;
+  getCanvas: () => HTMLCanvasElement | null;
+}
+
 type Tool = 'pen' | 'arrow' | 'text';
 
 type Shape =
@@ -30,11 +39,11 @@ const FONT = '600 16px system-ui, sans-serif';
 export default function MarkupOverlay({
   active,
   strings,
-  getViewerCanvas,
+  getViewerSource,
 }: {
   active: boolean;
   strings: MarkupStrings;
-  getViewerCanvas: () => HTMLCanvasElement | null;
+  getViewerSource: () => MarkupViewerSource | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -226,8 +235,14 @@ export default function MarkupOverlay({
     const ctx = out.getContext('2d');
     if (!ctx) return;
 
-    const viewer = getViewerCanvas();
-    if (viewer) ctx.drawImage(viewer, 0, 0, out.width, out.height);
+    // Render 3D tepat sebelum capture — dalam siklus JS yang sama — supaya
+    // buffer WebGL masih berisi gambar saat drawImage membacanya.
+    const source = getViewerSource();
+    if (source) {
+      source.renderNow();
+      const viewer = source.getCanvas();
+      if (viewer) ctx.drawImage(viewer, 0, 0, out.width, out.height);
+    }
     ctx.drawImage(canvas, 0, 0);
 
     const a = document.createElement('a');

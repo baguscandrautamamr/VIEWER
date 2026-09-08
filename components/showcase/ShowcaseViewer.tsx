@@ -1314,7 +1314,14 @@ export default function ShowcaseViewer({
       <MarkupOverlay
         active={markupOn}
         strings={locales[locale].markup}
-        getViewerCanvas={() => engineRef.current?.renderer.domElement ?? null}
+        getViewerSource={() =>
+          engineRef.current
+            ? {
+                renderNow: () => engineRef.current!.renderNow(),
+                getCanvas: () => engineRef.current!.renderer.domElement,
+              }
+            : null
+        }
       />
 
       {loadState !== 'ready' && (

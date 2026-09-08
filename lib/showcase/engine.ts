@@ -1473,6 +1473,19 @@ export class ShowcaseEngine {
     }
   }
 
+  // Gambar satu frame SEKARANG juga, apa pun status render on-demand. Dipakai
+  // sebelum menyimpan PNG markup: buffer WebGL dengan preserveDrawingBuffer
+  // false dikosongkan browser setelah frame selesai, jadi capture harus
+  // terjadi dalam siklus JS yang sama dengan render — bukan memakai sisa
+  // frame lama yang sudah dikosongkan.
+  renderNow() {
+    if (this.disposed) return;
+    this.renderer.render(this.scene, this.camera);
+    this.renderedPosition.copy(this.camera.position);
+    this.renderedQuaternion.copy(this.camera.quaternion);
+    this.renderDirty = false;
+  }
+
   clearMeasure() {
     this.measurePts = [];
     if (this.measureGroup) {

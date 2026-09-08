@@ -316,6 +316,37 @@ test('section box frame follows the clip sliders and matches the cutting planes'
   assert.equal(engine.sectionBox.visible, false);
 });
 
+// Skenario nyata dari laporan user: potong Y−, lalu tutup PANEL (React memanggil
+// setSection(false, clip-yang-masih-terpotong)) — potongan TETAP bekerja. Satu-
+// satunya cara mengembalikan model utuh: reset yang mengirim clip penuh (semua 1).
+test('closing the section panel never cancels the cut; only a full-clip reset does', () => {
+  const engine = sectionHarness();
+  // Material sungguhan supaya assertion benar-benar melihat bidang terpasang
+  // (harness dasar memakai array kosong — assertionnya jadi tidak menguji).
+  engine.clipMaterials = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
+  const FULL = { xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 };
+  const cutY = { xMin: 1, xMax: 1, yMin: 0.5, yMax: 1, zMin: 1, zMax: 1 };
+
+  // Panel dibuka, slider Y− digeser: potongan hidup.
+  engine.setSection(true, cutY);
+  assert.ok(engine.sectionOn, 'cut active while sliders are moved');
+  for (const m of engine.clipMaterials) assert.equal(m.clippingPlanes, engine.clipPlanes, 'planes applied while cut is live');
+
+  // Panel ditutup (✕ / pill): engine menerima on=false TAPI clip masih terpotong.
+  engine.setSection(false, cutY);
+  for (const m of engine.clipMaterials) assert.equal(m.clippingPlanes, engine.clipPlanes, 'cut survives panel close');
+
+  // Panel dibuka lagi: posisi slider masih di tempat, potongan tetap.
+  engine.setSection(true, cutY);
+  assert.ok(engine.sectionOn);
+
+  // "Turn off section" / reset view: clip dikembalikan penuh -> potongan benar-benar hilang.
+  engine.setSection(false, FULL);
+  assert.equal(engine.sectionOn, false, 'full reset turns the cut off');
+  for (const m of engine.clipMaterials) assert.deepEqual(m.clippingPlanes, [], 'no planes after reset');
+  assert.equal(engine.sectionBox.visible, false);
+});
+
 // --- Marker seleksi (gaya kotak penanda Mode teknis) ------------------------
 
 function markerHarness() {

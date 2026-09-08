@@ -812,19 +812,12 @@ export default function ShowcaseViewer({
       } else if (k === 'r') {
         resetView();
       } else if (k === 's') {
-        // Sama seperti pill: kalau potongan belum ada, mulai; kalau sedang
-        // ada dan panel terbuka, matikan (model utuh); kalau ada dan panel
-        // tertutup, buka panelnya saja.
-        if (engine.sectionOn && sectionOpen) {
-          setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
-          setSectionOn(false);
-          setSectionOpen(false);
-          resetView();
-        } else if (engine.sectionOn) setSectionOpen(true);
-        else {
+        // Sama seperti pill: belum ada potongan -> mulai (panel terbuka);
+        // sudah ada -> toggol panel saja, potongan tidak disentuh.
+        if (!engine.sectionOn) {
           setSectionOn(true);
           setSectionOpen(true);
-        }
+        } else setSectionOpen((v) => !v);
       } else if (k === '/' ) {
         e.preventDefault();
         setNavOpen(true);
@@ -1026,29 +1019,20 @@ export default function ShowcaseViewer({
               {Icons.spark}
               {s.assistant}
             </button>
-            {/* Pill section: buka/tutup PANEL slider. Potongan sendiri hidup
-                saat ada slider < 1 — jadi menutup pill/panel tidak pernah
-                mengubah bentuk model; hanya "Turn off section"/reset yang
-                mengembalikan model utuh. Menyala saat potongan hidup. */}
+            {/* Pill section HANYA membuka/menutup panel slider — TIDAK
+                pernah mengubah potongan. Potongan hidup selama ada slider
+                < 1 (lihat engine, clippingLive); satu-satunya cara
+                mengembalikan model utuh: Turn off section di panel, atau
+                Reset view. */}
             <button
               type="button"
               className={`sc-pill ${sectionOn ? 'is-on' : ''}`}
               onClick={() => {
-                if (sectionOn) {
-                  // Potongan hidup: toggol panel saja; kalau panel sudah
-                  // terbuka, klik kedua = matikan potongan (bentuk semula).
-                  if (sectionOpen) {
-                    setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
-                    setSectionOn(false);
-                    setSectionOpen(false);
-                    resetView();
-                  } else setSectionOpen(true);
-                } else {
-                  // Belum ada potongan: mulai dengan tepi penuh + panel.
+                if (!sectionOn) {
                   setClip({ xMin: 1, xMax: 1, yMin: 1, yMax: 1, zMin: 1, zMax: 1 });
                   setSectionOn(true);
                   setSectionOpen(true);
-                }
+                } else setSectionOpen((v) => !v);
               }}
               title={s.section}
             >

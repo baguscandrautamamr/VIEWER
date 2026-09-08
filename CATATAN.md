@@ -107,6 +107,19 @@ Website presentasi model Revit ke client:
 Terbaru di atas. Format: `tanggal — ringkasan (hash commit)`.
 
 ### 7 September 2026
+- **Perbaikan ketiga section — kali ini dengan test yang membuktikan.**
+  Perbaikan sebelumnya MASIH membawa jalur lama: klik pill Section kedua (saat
+  panel terbuka) saya buat mematikan potongan + resetView — persis keluhan
+  user ("sudah deploy, hasilnya sama"). Kini pill, ✕, dan tombol S semuanya
+  HANYA membuka/menutup panel; satu-satunya cara membatalkan potongan:
+  "Turn off section" atau Reset view. Engine-nya sendiri sudah benar
+  (potongan hidup selama ada slider < 1). Ditambah test regresi
+  `closing the section panel never cancels the cut` yang memanggil
+  `setSection` persis seperti React melakukannya (on=false + clip terpotong →
+  bidang TETAP terpasang; clip penuh → lepas) — jadi jalur ini tidak bisa
+  rusak diam-diam lagi. Pelajaran: kalau perbaikan "tidak berubah" saat
+  deploy, cari jalur LAIN yang masih memanggil perilaku lama — dan kunci
+  perbaikan dengan test yang mereproduksi langkah user, bukan cuma build.
 - **Potongan menempel di model, bukan di panel (versi final).** Laporan:
   setelah Y− dipotong, menyalakan-mematikan pill Section membuat piling kembali
   utuh padahal panelnya saja yang ditutup. Diperbaiki dua sisi: (a) di engine,

@@ -31,14 +31,22 @@ function maxDim(b: ModelBounds) {
   return Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) || 1;
 }
 
+// FOV vertikal kamera presentasi (PerspectiveCamera(50, …) di engine).
+const FOV_HALF = (50 * Math.PI) / 360;
+
 // Pose isometrik yang membingkai kotak `b` dengan FOV vertikal ~50°.
-export function isoPose(b: ModelBounds, dirHint: [number, number, number] = [1, 0.75, 1]): CameraPose {
+// `aspect` = rasio canvas (lebar/tinggi): jarak fit diputuskan FOV yang lebih
+// sempit. Di canvas yang tidak penuh layar (panel samping terbuka, jendela
+// kecil) FOV horizontal bisa lebih kecil dari vertikal — tanpa ini model
+// terpotong kiri-kanan dan hanya terlihat utuh saat layar penuh.
+export function isoPose(b: ModelBounds, dirHint: [number, number, number] = [1, 0.75, 1], aspect = 1): CameraPose {
   const c = boundsCenter(b);
   // Bola pembatas kotak selalu lebih besar dari isinya; dari sudut isometrik
   // model biasanya memenuhi ~75% diameter bola, jadi jaraknya dikoreksi supaya
   // model tidak tampil kecil di tengah layar.
   const r = Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2 || 1;
-  const dist = (r * 0.78) / Math.sin((50 * Math.PI) / 360);
+  const hHalf = Math.atan(Math.tan(FOV_HALF) * Math.max(aspect, 0.05));
+  const dist = (r * 0.78) / Math.sin(Math.min(FOV_HALF, hHalf));
   const len = Math.hypot(...dirHint) || 1;
   const d = dirHint.map((v) => v / len) as [number, number, number];
   return { position: [c[0] + d[0] * dist, c[1] + d[1] * dist, c[2] + d[2] * dist], target: c };

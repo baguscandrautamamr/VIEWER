@@ -169,10 +169,6 @@ export default function ModelViewer({
   // dimatikan supaya berhenti seketika. Zoom, geser, keyboard tetap jalan;
   // memutar tetap bisa lewat Shift + roda tengah.
   const lockOnRef = useRef(false);
-  // Pengguna pernah menggerakkan kamera sendiri? Kalau belum, perubahan rasio
-  // canvas (layar penuh, sidebar buka-tutup) memicu bingkai-ulang otomatis.
-  const userNavigatedRef = useRef(false);
-  const lastAspectRef = useRef(0);
   // Status tombol Shift. Dilacak lewat keydown/keyup, BUKAN dibaca saat klik:
   // OrbitControls memasang handler pointerdown-nya lebih dulu, jadi pemetaan
   // tombol mouse harus sudah benar sebelum tombol ditekan.
@@ -647,7 +643,6 @@ export default function ModelViewer({
       // tween dan gerakan tangan saling tarik-menarik. Seleksi lewat klik tetap
       // bisa memulai animasi baru, karena `click` menyusul setelah pointerup.
       flyRef.current = null;
-      userNavigatedRef.current = true;
       // Dua cara menoleh dengan klik kiri, keduanya sudah dilepas dari
       // OrbitControls lewat updateMouseButtons() supaya tidak bentrok:
       //   - Shift + klik kiri        -> kiri/kanan saja
@@ -676,7 +671,6 @@ export default function ModelViewer({
     // ditahan (lihat updateMouseButtons), jadi tidak ikut memperbesar.
     function handleWheel(event: WheelEvent) {
       flyRef.current = null; // zoom manual membatalkan animasi auto-fokus
-      userNavigatedRef.current = true;
       if (!event.shiftKey || walkingRef.current) return;
       event.preventDefault();
       lookAround(0, -Math.sign(event.deltaY) * 0.04);
@@ -855,7 +849,6 @@ export default function ModelViewer({
       const target = walkingRef.current ? walkKeysRef.current : orbitKeysRef.current;
       if (setMoveKey(target, e, true)) {
         flyRef.current = null; // gerak manual membatalkan animasi auto-fokus
-        userNavigatedRef.current = true;
         e.preventDefault();
       }
     }
@@ -949,11 +942,6 @@ export default function ModelViewer({
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
       needsRenderRef.current = true;
-      // Rasio berubah & pengguna belum pernah navigasi manual: bingkai ulang
-      // model supaya seluruhnya tetap terlihat (lihat reframeModel).
-      const changed = lastAspectRef.current > 0 && Math.abs(camera.aspect - lastAspectRef.current) / lastAspectRef.current > 0.02;
-      lastAspectRef.current = camera.aspect;
-      if (changed && !userNavigatedRef.current) reframeModel();
     }
     const resizeObserver = new ResizeObserver(() => handleResize());
     resizeObserver.observe(container);
@@ -1330,44 +1318,15 @@ export default function ModelViewer({
     modelSizeRef.current = size.clone();
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const dist = maxDim * 1.8;
     flyRef.current = null; // "Fokus" ke seluruh model membatalkan animasi berjalan
     walkSpeedRef.current = maxDim * 0.4; // kecepatan jalan relatif ukuran model
     camera.near = Math.max(maxDim / 1000, 0.01);
     camera.far = maxDim * 100;
-    // Jarak pas membingkai seluruh model, dihitung dari FOV vertikal DAN
-    // horizontal (bola pembatas). Rumus lama `maxDim * 1.8` tidak melihat
-    // rasio layar: di canvas sempit model tampil kecil, di layar penuh tidak
-    // pernah benar-benar pas.
-    const fitDist = fitDistance(maxDim, camera);
-    camera.position.set(1, 0.8, 1).normalize().multiplyScalar(fitDist);
+    camera.position.set(dist, dist * 0.8, dist);
     camera.updateProjectionMatrix();
     controls.target.set(0, 0, 0);
     controls.update();
-  }
-
-  // Jarak kamera supaya bola radius `radius` pas di layar pada FOV kamera itu
-  // (diputuskan FOV yang lebih sempit: vertikal atau horizontal).
-  function fitDistance(radius: number, camera: THREE.PerspectiveCamera): number {
-    const vHalf = ((camera.fov * Math.PI) / 180) / 2;
-    const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
-    return (radius / Math.sin(Math.min(vHalf, hHalf))) * 1.15;
-  }
-
-  // Bingkai ulang seluruh model TANPA mengubah arah pandang: kamera meluncur
-  // sepanjang garis pandang sekarang sampai model pas di layar. Dipakai saat
-  // rasio canvas berubah (layar penuh, sidebar) dan pengguna belum navigasi
-  // manual — supaya gambar yang sudah ada di canvas selalu terlihat semua.
-  function reframeModel() {
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
-    const size = modelSizeRef.current;
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const fitDist = fitDistance(maxDim / 2, camera);
-    const dir = camera.position.clone().sub(controls.target);
-    if (dir.lengthSq() < 1e-8) dir.set(1, 0.8, 1);
-    dir.normalize();
-    flyTo(controls.target.clone().addScaledVector(dir, fitDist), controls.target.clone());
   }
 
   // Seberapa layak sebuah mesh "dimaksud" saat diklik, dinilai dari material

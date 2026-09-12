@@ -359,12 +359,6 @@ export class ShowcaseEngine {
   private tmpRay = new THREE.Ray();
   private pickCands: number[] = [];
 
-  // Pengguna pernah menggerakkan kamera sendiri? Dipakai resize(): sebelum ada
-  // navigasi manual, perubahan rasio canvas memicu bingkai-ulang otomatis
-  // supaya model tetap terlihat utuh (masuk/keluar layar penuh, panel buka-tutup).
-  private userMoved = false;
-  private lastAspect = 0;
-
   // --- label & minimap (DOM langsung) ---
   private labelLayer: HTMLDivElement;
   private labelPool: HTMLDivElement[] = [];
@@ -618,8 +612,8 @@ export class ShowcaseEngine {
     // Kamera ditaruh jauh dulu; animasi masuknya baru dijalankan setelah model
     // lengkap (kalau dijalankan sekarang, animasinya patah-patah karena
     // menggambar sedang direm demi penggabungan).
-    const far = isoPose(this.bounds, [1.6, 1.6, 1.6], this.camera.aspect);
-    const target = isoPose(this.bounds, [1, 0.75, 1], this.camera.aspect);
+    const far = isoPose(this.bounds, [1.6, 1.6, 1.6]);
+    const target = isoPose(this.bounds);
     far.position = far.position.map((v, i) => v + (v - target.position[i]) * 0.8) as [number, number, number];
     this.setPoseImmediate(far);
 
@@ -1108,7 +1102,7 @@ export class ShowcaseEngine {
     this.renderer.shadowMap.needsUpdate = true;
     this.emit('progress', { value: 100, stage: 'prepare' });
     this.emit('ready', undefined);
-    this.flyTo(isoPose(this.bounds, [1, 0.75, 1], this.camera.aspect), 1.8);
+    this.flyTo(isoPose(this.bounds), 1.8);
   }
 
   // Dipakai UI untuk memberi tahu kalau kualitas diturunkan otomatis.
@@ -1912,7 +1906,7 @@ export class ShowcaseEngine {
   }
 
   overview(dur = 1.4) {
-    this.goTo(isoPose(this.bounds, [1, 0.75, 1], this.camera.aspect), 'orbit', dur);
+    this.goTo(isoPose(this.bounds), 'orbit', dur);
   }
   entrance(dur = 1.4) {
     this.eyeOffset = EYE_LEVEL;
@@ -1993,7 +1987,7 @@ export class ShowcaseEngine {
     const dir = this.camera.position.clone().sub(this.controls.target);
     if (dir.lengthSq() < 1e-6 || this.mode === 'walk') dir.set(1, 0.75, 1);
     if (dir.y < 0.2) dir.y = 0.2;
-    const pose = isoPose({ min, max }, [dir.x, dir.y, dir.z], this.camera.aspect);
+    const pose = isoPose({ min, max }, [dir.x, dir.y, dir.z]);
     this.goTo(pose, 'orbit', dur);
   }
 
@@ -2059,7 +2053,6 @@ export class ShowcaseEngine {
 
   private onPointerDown = (e: PointerEvent) => {
     if (this.inputLocked) return;
-    this.userMoved = true;
     this.cancelTween();
     this.controls.autoRotate = false;
     this.emit('userInput', undefined);
@@ -2125,7 +2118,6 @@ export class ShowcaseEngine {
   };
   private onWheel = (e: WheelEvent) => {
     if (this.inputLocked) return;
-    this.userMoved = true;
     this.cancelTween();
     this.controls.autoRotate = false;
     this.emit('userInput', undefined);
@@ -2139,7 +2131,6 @@ export class ShowcaseEngine {
     const k = e.key.toLowerCase();
     if (['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
       if (k !== 'shift') {
-        this.userMoved = true;
         this.cancelTween();
         this.controls.autoRotate = false;
         this.emit('userInput', undefined);
@@ -2166,27 +2157,10 @@ export class ShowcaseEngine {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     if (w === 0 || h === 0) return;
-    const aspect = w / h;
-    const aspectChanged = this.lastAspect > 0 && Math.abs(aspect - this.lastAspect) / this.lastAspect > 0.02;
-    this.camera.aspect = aspect;
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.renderDirty = true;
-    this.lastAspect = aspect;
-    // Rasio canvas berubah dan pengguna belum pernah navigasi manual: bingkai
-    // ulang model supaya seluruhnya terlihat (kenapa: pose fit dihitung dari
-    // rasio lama — setelah layar penuh dibuka/ditutup atau panel buka-tutup,
-    // model bisa terpotong tanpa perbaikan ini). Setelah navigasi manual,
-    // posisi kamera tidak pernah diusik.
-    if (aspectChanged && !this.userMoved && this.mode === 'orbit' && !this.merge) {
-      if (this.planActive) this.plan(0.6);
-      else {
-        const dir = this.camera.position.clone().sub(this.controls.target);
-        if (dir.lengthSq() < 1e-6) dir.set(1, 0.75, 1);
-        dir.normalize();
-        this.flyTo(isoPose(this.bounds, [dir.x, dir.y, dir.z], aspect), 0.6);
-      }
-    }
   }
 
   private stepKeys(dt: number) {
